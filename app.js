@@ -11,6 +11,10 @@ let editingId = null;
 let existingPhotos = []; // 저장된 사진 파일명
 let pendingPhotos = [];  // {blob, url, name}
 let current = null;      // 상세보기 중인 기록
+let currentAI = null;    // AI 추론 결과
+const CAT_EM = { 병해: "🦠", 충해: "🐛", 생리장해: "🌡️", 기타: "❓" };
+const SEV_EM = { 경미: "🟢", 보통: "🟠", 심각: "🔴" };
+const ST_EM = { 진단중: "🔍", 조치안내: "📢", 완료: "✅" };
 
 function toast(msg, ms = 2500) {
   const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden");
@@ -154,7 +158,7 @@ async function reverseGeocode(lat, lng) {
     const j = await DB.reverse(lat, lng);
     const addr = fmtAddr(j);
     if (addr) f.address.value = addr;
-    $("#locStatus").textContent = "위치 기록됨";
+    $("#locStatus").textContent = "✅ 위치·주소 기록 완료";
   } catch (e) {
     $("#locStatus").textContent = "좌표는 기록됨 (주소 자동조회 실패 — 직접 입력하세요)";
   }
@@ -164,13 +168,13 @@ $("#btnLocate").onclick = () => {
   const f = $("#recForm");
   f.visitedAt.value = nowLocal();
   if (!navigator.geolocation) { $("#locStatus").textContent = "이 환경에서는 위치 기능을 쓸 수 없습니다. 지도 클릭 또는 주소 검색을 이용하세요."; return; }
-  $("#locStatus").textContent = "현재 위치 확인 중… (처음에는 위치 권한 허용 창이 뜰 수 있습니다)";
+  $("#locStatus").textContent = "🛰️ 현재 위치 확인 중… (처음엔 위치 권한 허용 창이 떠요)";
   $("#btnLocate").disabled = true;
   navigator.geolocation.getCurrentPosition(pos => {
     $("#btnLocate").disabled = false;
     const { latitude, longitude, accuracy } = pos.coords;
     setFormPoint(latitude, longitude);
-    $("#locStatus").textContent = `위치 기록됨 (오차 약 ${Math.round(accuracy)}m)`;
+    $("#locStatus").textContent = `✅ 위치 기록 완료 (오차 약 ${Math.round(accuracy)}m)`;
     if (accuracy > 500) toast("위치 오차가 큽니다. 지도에서 마커를 끌어 실제 농가 위치로 조정하세요.", 4500);
   }, err => {
     $("#btnLocate").disabled = false;
@@ -267,9 +271,9 @@ $("#recForm").pestName.addEventListener("change", () => fillFromRef(false));
 function renderRef() {
   const q = $("#refQ").value.trim();
   const list = PEST_REF.filter(p => !q || (p.name + p.crops + p.category + p.symptoms).includes(q));
-  $("#refList").innerHTML = list.map(p => `<div class="ref"><h4>${esc(p.name)}</h4><div class="tag">${esc(p.category)} · ${esc(p.crops)}</div>
-    <p><b>증상</b> ${esc(p.symptoms)}</p><p><b>진단</b> ${esc(p.diagnosis)}</p><p><b>대처</b>\n${esc(p.remedy)}</p>
-    <button data-use="${esc(p.name)}">이 내용으로 새 기록 작성</button></div>`).join("");
+  $("#refList").innerHTML = list.map(p => `<div class="ref"><h4>${CAT_EM[p.category] || ""} ${esc(p.name)}</h4><div class="tag">${esc(p.category)} · 🌾 ${esc(p.crops)}</div>
+    <p><b>👀 증상</b> ${esc(p.symptoms)}</p><p><b>🩺 진단</b> ${esc(p.diagnosis)}</p><p><b>💊 대처</b>\n${esc(p.remedy)}</p>
+    <button data-use="${esc(p.name)}">📝 이 내용으로 새 기록</button></div>`).join("");
   $$("button[data-use]").forEach(b => b.onclick = () => {
     showTab("new"); const f = $("#recForm"); f.pestName.value = b.dataset.use;
     f.symptoms.value = f.diagnosis.value = f.remedy.value = ""; fillFromRef(false);
@@ -277,10 +281,108 @@ function renderRef() {
 }
 $("#refQ").oninput = renderRef;
 
+/* ---------- 🤖 AI 추론 ---------- */
+function aiHTML(a, interactive = true) {
+  const c = a.candidates || [];
+  return `<div class="ai-card"><h4>🤖 AI 병해충 추론 결과</h4>
+    <div class="ai-meta">${esc(a.at || "")} · 🌾 입력 작목: ${esc(a.crop || "")} · 참고용 결과예요</div>
+    ${a.caution ? `<div class="ai-warn">🚨 ${esc(a.caution)}</div>` : ""}
+    ${c.map((x, i) => `<div class="cand ${i === 0 ? "top" : ""}"><div class="cand-h"><span class="rank">${i + 1}순위</span><b>${CAT_EM[x.category] || ""} ${esc(x.name)}</b><span class="muted small">${esc(x.category)}</span>
+        ${interactive ? `<button type="button" class="ghost" data-apply="${i}" style="margin-left:auto;padding:6px 10px">✅ 이걸로 적용</button>` : ""}</div>
+      <div class="conf">확신도 <span class="bar"><i style="width:${Math.max(0, Math.min(100, +x.confidence || 0))}%"></i></span> ${esc(x.confidence)}%</div>
+      <b class="small">🔎 판단 근거</b><ul>${(x.evidence || []).map(e => `<li>${esc(e)}</li>`).join("")}</ul>
+      ${x.against ? `<div class="against">⚖️ 확인 필요: ${esc(x.against)}</div>` : ""}</div>`).join("")}
+    <div class="ai-sec"><b>🌿 작목 확인</b><div>${esc(a.crop_match)}</div></div>
+    <div class="ai-sec"><b>📷 사진 상태</b><div>${esc(a.photo_quality)}</div></div>
+    ${(a.field_checks || []).length ? `<div class="ai-sec"><b>🧪 현장에서 더 확인할 것</b><div>${a.field_checks.map(x => "• " + esc(x)).join("\n")}</div></div>` : ""}
+  </div>`;
+}
+function renderAI() {
+  const box = $("#aiResult");
+  if (!currentAI) { box.innerHTML = ""; return; }
+  box.innerHTML = aiHTML(currentAI, true);
+  $$("button[data-apply]", box).forEach(b => b.onclick = () => applyAI(+b.dataset.apply));
+}
+function applyAI(i) {
+  const a = currentAI, c = a.candidates[i], f = $("#recForm");
+  if (!c) return;
+  const filled = f.symptoms.value || f.diagnosis.value || f.remedy.value;
+  if (filled && !confirm("증상·진단·대처방안 칸을 AI 결과로 바꿀까요?")) return;
+  f.pestName.value = c.name;
+  f.category.value = ["병해", "충해", "생리장해", "기타"].includes(c.category) ? c.category : "기타";
+  if (a.severity) f.severity.value = a.severity;
+  f.symptoms.value = a.symptoms || "";
+  f.diagnosis.value = (i === 0 ? a.diagnosis : `${c.name} 가능성 (확신도 ${c.confidence}%)`) + "\n\n[판단 근거]\n" + (c.evidence || []).map(e => "- " + e).join("\n");
+  f.remedy.value = a.remedy || "";
+  if (i !== 0) { const ref = PEST_REF.find(p => p.name === c.name); if (ref) f.remedy.value = ref.remedy; }
+  if (a.caution) f.notes.value = (f.notes.value ? f.notes.value + "\n" : "") + "🚨 " + a.caution;
+  toast("✅ AI 결과를 적용했어요. 현장 상황에 맞게 고쳐 주세요.");
+  f.pestName.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+async function photoBlobs() {
+  const out = pendingPhotos.map(p => p.blob);
+  for (const n of existingPhotos) { try { out.push(await (await fetch(P(n))).blob()); } catch (e) { } }
+  return out;
+}
+$("#btnAI").onclick = async () => {
+  const f = $("#recForm"), btn = $("#btnAI");
+  const crop = f.crop.value.trim();
+  if (!crop) { toast("🌾 작목을 먼저 입력해 주세요."); f.crop.focus(); return; }
+  if (!pendingPhotos.length && !existingPhotos.length) { toast("📸 사진을 먼저 첨부해 주세요."); return; }
+  if (!PestAI.getKey()) { toast("⚙️ 설정에서 AI API 키를 먼저 입력해 주세요."); openSettings(); return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> AI가 사진을 살펴보는 중… (10~40초)';
+  try {
+    const res = await PestAI.diagnose({ crop, notes: f.notes.value.trim(), blobs: await photoBlobs() });
+    res.crop = crop;
+    currentAI = res; renderAI();
+    $("#aiResult").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    if (e.message === "NO_KEY") openSettings(); else alert("🤖 " + e.message);
+  } finally { btn.disabled = false; btn.innerHTML = "🤖 AI로 병해충 추론하기"; }
+};
+
+/* ---------- ⚙️ 설정 ---------- */
+function openSettings() {
+  const k = PestAI.getKey();
+  $("#apiKeyInput").value = "";
+  $("#apiKeyInput").placeholder = k ? `저장됨 (${k.slice(0, 10)}…${k.slice(-4)})` : "sk-ant-...";
+  $("#keyState").className = "status " + (k ? "ok" : "");
+  $("#keyState").textContent = k ? "✅ API 키가 저장되어 있어요." : "🔑 아직 API 키가 없어요.";
+  $("#modeInfo").innerHTML = DB.mode === "pc"
+    ? "💻 PC 프로그램 모드 · 기록은 exe 옆 ‘예찰데이터’ 폴더에 저장돼요."
+    : "📱 휴대폰 모드 · 기록은 이 휴대폰 브라우저 안에 저장돼요. 목록 › 📦 백업 내보내기로 PC에 옮기세요.";
+  $("#settingsModal").classList.remove("hidden");
+}
+$("#btnSettings").onclick = openSettings;
+$("#settingsClose").onclick = () => $("#settingsModal").classList.add("hidden");
+$("#settingsModal").onclick = e => { if (e.target.id === "settingsModal") $("#settingsModal").classList.add("hidden"); };
+$("#btnKeySave").onclick = () => {
+  const v = $("#apiKeyInput").value.trim();
+  if (!v) { toast("API 키를 붙여넣어 주세요."); return; }
+  if (!v.startsWith("sk-ant-")) { if (!confirm("일반적인 Anthropic API 키(sk-ant-…) 형식이 아니에요. 그래도 저장할까요?")) return; }
+  PestAI.setKey(v); openSettings(); toast("🔑 API 키를 저장했어요.");
+};
+$("#btnKeyClear").onclick = () => { PestAI.setKey(""); openSettings(); toast("API 키를 지웠어요."); };
+
+/* ---------- 😀 이모티콘 넣기 ---------- */
+let lastField = null;
+$$("#recForm textarea, #recForm input[name=pestName], #recForm input[name=farmName]").forEach(el => el.addEventListener("focus", () => { lastField = el; }));
+const EMOJIS = ["✅", "⚠️", "🚨", "❗", "💡", "📌", "🔴", "🟠", "🟢", "🦠", "🐛", "🍂", "🌱", "🌾", "🍅", "🌶️", "🍓", "🍎", "💧", "☀️", "🌧️", "🌡️", "💊", "✂️", "🧪", "📞", "📅", "👍"];
+$("#emojiBar").innerHTML = '<span class="lab">😀 이모티콘</span>' + EMOJIS.map(e => `<button type="button" data-em="${e}">${e}</button>`).join("");
+$$("#emojiBar button").forEach(b => {
+  b.addEventListener("mousedown", e => e.preventDefault()); // 입력칸 포커스 유지
+  b.onclick = () => {
+    const el = lastField || $("#recForm").notes;
+    const st = el.selectionStart ?? el.value.length, en = el.selectionEnd ?? el.value.length;
+    el.value = el.value.slice(0, st) + b.dataset.em + el.value.slice(en);
+    el.focus(); const p = st + b.dataset.em.length; try { el.setSelectionRange(p, p); } catch (e) { }
+  };
+});
+
 /* ---------- 저장 ---------- */
 function resetForm() {
   const f = $("#recForm"); f.reset();
-  editingId = null; existingPhotos = [];
+  editingId = null; existingPhotos = []; currentAI = null; renderAI();
   pendingPhotos.forEach(p => URL.revokeObjectURL(p.url)); pendingPhotos = [];
   renderThumbs();
   if (formMarker) { formMap.removeLayer(formMarker); formMarker = null; }
@@ -307,10 +409,10 @@ $("#recForm").onsubmit = async e => {
       visitedAt: fromInputDT(f.visitedAt.value) || fromInputDT(nowLocal()),
       crop: f.crop.value.trim(), area: f.area.value.trim(), category: f.category.value, pestName: f.pestName.value.trim(),
       severity: f.severity.value, symptoms: f.symptoms.value, diagnosis: f.diagnosis.value, remedy: f.remedy.value,
-      notes: f.notes.value, status: f.status.value, photos: [...existingPhotos],
+      notes: f.notes.value, status: f.status.value, photos: [...existingPhotos], aiResult: currentAI || null,
     };
     const saved = await DB.save(editingId, rec, pendingPhotos);
-    toast(editingId ? "수정되었습니다." : "저장되었습니다.");
+    toast(editingId ? "✏️ 수정했어요!" : "💾 저장했어요!");
     await refresh();
     resetForm();
     openDetail(saved.id);
@@ -329,6 +431,7 @@ function startEdit(r) {
   if (r.lat != null && r.lng != null) setFormPoint(r.lat, r.lng, { reverse: false });
   existingPhotos = [...(r.photos || [])];
   renderThumbs();
+  currentAI = r.aiResult || null; renderAI();
   $("#editBadge").classList.remove("hidden");
   $("#btnSave").textContent = "💾 수정 저장";
   closeModal(); showTab("new");
@@ -348,16 +451,25 @@ function filtered() {
     return true;
   });
 }
+function renderStats() {
+  const ym = fromInputDT(nowLocal()).slice(0, 7);
+  const n = records.length, month = records.filter(r => (r.visitedAt || "").startsWith(ym)).length;
+  const sev = records.filter(r => r.severity === "심각").length, open = records.filter(r => r.status !== "완료").length;
+  $("#stats").innerHTML = [["📋", n, "전체 기록"], ["📅", month, "이번 달 방문"], ["🔴", sev, "심각"], ["⏳", open, "조치 진행 중"]]
+    .map(([e, v, l]) => `<div class="stat"><div class="em">${e}</div><b>${v}</b><span>${l}</span></div>`).join("");
+}
 function renderList() {
+  renderStats();
   const list = filtered();
-  $("#summary").textContent = `총 ${records.length}건 중 ${list.length}건 표시`;
-  $("#listBody").innerHTML = list.length ? list.map(r => `<tr data-id="${esc(r.id)}">
-    <td>${r.photos?.length ? `<img src="${esc(P(r.photos[0]))}">` : ""}</td>
-    <td>${esc(r.visitedAt?.slice(0, 16))}</td><td><b>${esc(r.farmName)}</b><div class="muted">${esc(r.farmer)}</div></td>
-    <td>${esc(r.address)}</td><td>${esc(r.crop)}</td><td>${esc(r.pestName)}<div class="muted">${esc(r.category)}</div></td>
-    <td><span class="sev ${esc(r.severity)}">${esc(r.severity)}</span></td><td><span class="st ${esc(r.status)}">${esc(r.status)}</span></td></tr>`).join("")
-    : `<tr><td colspan="8" class="muted" style="text-align:center;padding:30px">기록이 없습니다. ‘새 예찰 기록’에서 작성하세요.</td></tr>`;
-  $$("#listBody tr[data-id]").forEach(tr => tr.onclick = () => openDetail(tr.dataset.id));
+  $("#summary").textContent = `총 ${records.length}건 중 ${list.length}건`;
+  $("#listBody").innerHTML = list.length ? list.map(r => `<div class="rec" data-id="${esc(r.id)}">
+    <div class="ph">${r.photos?.length ? `<img src="${esc(P(r.photos[0]))}" alt="">` : (CAT_EM[r.category] || "🌱")}</div>
+    <div><div class="t">${esc(r.farmName)} ${r.crop ? `<span class="muted" style="font-weight:600;font-size:14px">· 🌾 ${esc(r.crop)}</span>` : ""}</div>
+      <div class="p">${CAT_EM[r.category] || ""} ${esc(r.pestName || "병해충 미정")}${r.aiResult ? ' <span title="AI 추론 기록 있음">🤖</span>' : ""}</div>
+      <div class="s">🕒 ${esc(r.visitedAt?.slice(0, 16))} · 📍 ${esc(r.address || "주소 없음")}</div></div>
+    <div class="tags"><span class="sev ${esc(r.severity)}">${SEV_EM[r.severity] || ""} ${esc(r.severity)}</span><span class="st ${esc(r.status)}">${ST_EM[r.status] || ""} ${esc(r.status)}</span></div></div>`).join("")
+    : `<div class="empty"><div class="big-em">🌾</div><p>${records.length ? "조건에 맞는 기록이 없어요." : "아직 기록이 없어요. 📝 새 기록에서 첫 예찰을 남겨 보세요!"}</p></div>`;
+  $$("#listBody .rec").forEach(el => el.onclick = () => openDetail(el.dataset.id));
 }
 async function loadList() { try { await refresh(); renderList(); } catch (e) { toast(e.message); } }
 ["q", "fCat", "fStatus", "fFrom", "fTo"].forEach(id => $("#" + id).addEventListener("input", renderList));
@@ -365,14 +477,16 @@ async function loadList() { try { await refresh(); renderList(); } catch (e) { t
 /* ---------- 상세 ---------- */
 let detailMap = null;
 function detailHTML(r) {
-  const rows = [["방문일시", r.visitedAt], ["농가주", r.farmer], ["연락처", r.phone], ["이메일", r.email], ["주소", r.address],
-    ["좌표", r.lat != null ? `${(+r.lat).toFixed(6)}, ${(+r.lng).toFixed(6)}` : ""], ["작물", r.crop], ["재배면적", r.area],
-    ["구분", r.category], ["병해충명", r.pestName], ["심각도", r.severity], ["증상", r.symptoms], ["진단", r.diagnosis],
-    ["대처방안", r.remedy], ["비고", r.notes], ["처리상태", r.status]];
-  return `<div class="detail"><h3>${esc(r.farmName)}</h3><div class="muted">기록 ${esc(r.createdAt)}${r.updatedAt !== r.createdAt ? " · 수정 " + esc(r.updatedAt) : ""}</div>
+  const rows = [["🕒 방문일시", r.visitedAt], ["👤 농가주", r.farmer], ["📞 연락처", r.phone], ["✉️ 이메일", r.email], ["🏠 주소", r.address],
+    ["📍 좌표", r.lat != null ? `${(+r.lat).toFixed(6)}, ${(+r.lng).toFixed(6)}` : ""], ["🌾 작목", r.crop], ["📐 재배면적", r.area],
+    ["🔬 병해충명", r.pestName], ["👀 증상", r.symptoms], ["🩺 진단", r.diagnosis], ["💊 대처방안", r.remedy], ["📝 비고", r.notes]];
+  return `<div class="detail"><h3>🏡 ${esc(r.farmName)}</h3>
+    <div class="d-tags"><span class="sev ${esc(r.severity)}">${SEV_EM[r.severity] || ""} ${esc(r.severity)}</span><span class="st ${esc(r.status)}">${ST_EM[r.status] || ""} ${esc(r.status)}</span><span class="st 완료">${CAT_EM[r.category] || ""} ${esc(r.category)}</span></div>
+    <div class="muted small">기록 ${esc(r.createdAt)}${r.updatedAt !== r.createdAt ? " · 수정 " + esc(r.updatedAt) : ""}</div>
     <div class="thumbs">${(r.photos || []).map(p => `<div class="thumb"><img src="${esc(P(p))}" data-full="${esc(P(p))}"></div>`).join("")}</div>
     ${r.lat != null ? '<div id="detailMap" class="map"></div>' : ""}
-    <dl class="kv">${rows.filter(x => x[1]).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl></div>`;
+    <dl class="kv">${rows.filter(x => x[1]).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${r.aiResult ? aiHTML(r.aiResult, false) : ""}</div>`;
 }
 function openDetail(id) {
   const r = records.find(x => x.id === id); if (!r) return;
@@ -389,7 +503,7 @@ function openDetail(id) {
 function closeModal() { $("#modal").classList.add("hidden"); if (detailMap) { detailMap.remove(); detailMap = null; } }
 $("#modalClose").onclick = closeModal;
 $("#modal").onclick = e => { if (e.target.id === "modal") closeModal(); };
-document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#lightbox").classList.add("hidden"); closeModal(); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#lightbox").classList.add("hidden"); closeModal(); $("#settingsModal").classList.add("hidden"); } });
 $("#btnEdit").onclick = () => current && startEdit(current);
 $("#btnDelete").onclick = async () => {
   if (!current || !confirm(`‘${current.farmName}’ 기록과 사진을 삭제할까요? 되돌릴 수 없습니다.`)) return;
@@ -403,7 +517,7 @@ $("#btnPrint").onclick = () => {
     <table>${row("농가명", r.farmName)}${row("농가주", r.farmer)}${row("연락처", r.phone)}${row("주소", r.address)}
     ${row("방문일시", r.visitedAt)}${row("작물 / 면적", [r.crop, r.area].filter(Boolean).join(" / "))}
     ${row("병해충명", `${r.pestName} (${r.category}, ${r.severity})`)}${row("증상", r.symptoms)}${row("진단", r.diagnosis)}
-    ${row("대처방안", r.remedy)}${r.notes ? row("비고", r.notes) : ""}</table>
+    ${row("대처방안", r.remedy)}${r.notes ? row("비고", r.notes) : ""}${r.aiResult?.candidates?.length ? row("AI 추론(참고)", r.aiResult.candidates.map((c, i) => `${i + 1}. ${c.name} (${c.confidence}%)\n   근거: ${(c.evidence || []).join(" / ")}`).join("\n")) : ""}</table>
     <div class="pimgs">${(r.photos || []).slice(0, 6).map(p => `<img src="${esc(P(p))}">`).join("")}</div>
     <p style="text-align:right;margin-top:20px">${new Date().toLocaleDateString("ko-KR")}</p>`;
   const imgs = $$("#printArea img");
@@ -412,7 +526,7 @@ $("#btnPrint").onclick = () => {
 
 /* ---------- 전체 지도 ---------- */
 let bigMap = null, bigLayer = null;
-const SEV_COLOR = { 경미: "#43a047", 보통: "#ef8f00", 심각: "#c62828" };
+const SEV_COLOR = { 경미: "#2fb36a", 보통: "#f2994a", 심각: "#e5484d" };
 async function renderBigMap() {
   try { await refresh(); } catch (e) { toast(e.message); }
   if (!bigMap) {
@@ -424,11 +538,11 @@ async function renderBigMap() {
   bigLayer.clearLayers();
   const pts = records.filter(r => r.lat != null && r.lng != null);
   pts.forEach(r => {
-    const icon = L.divIcon({ className: "", html: `<div class="mk" style="background:${SEV_COLOR[r.severity] || "#607d8b"}"></div>`, iconSize: [16, 16], iconAnchor: [8, 8] });
+    const icon = L.divIcon({ className: "", html: `<div class="pin" style="background:${SEV_COLOR[r.severity] || "#607d8b"}"><span>${CAT_EM[r.category] || "🌱"}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
     L.marker([r.lat, r.lng], { icon }).addTo(bigLayer)
-      .bindPopup(`<b>${esc(r.farmName)}</b><br>${esc(r.visitedAt?.slice(0, 10))} · ${esc(r.crop)}<br>${esc(r.pestName)} <span class="sev ${esc(r.severity)}">${esc(r.severity)}</span><br><a href="#" data-open="${esc(r.id)}">상세 보기</a>`);
+      .bindPopup(`<b>🏡 ${esc(r.farmName)}</b><br>🕒 ${esc(r.visitedAt?.slice(0, 10))} · 🌾 ${esc(r.crop)}<br>${CAT_EM[r.category] || ""} ${esc(r.pestName)} <span class="sev ${esc(r.severity)}">${SEV_EM[r.severity] || ""} ${esc(r.severity)}</span><br><a href="#" data-open="${esc(r.id)}">🔎 상세 보기</a>`);
   });
-  $("#mapCount").textContent = `위치가 기록된 ${pts.length}곳`;
+  $("#mapCount").textContent = `📍 ${pts.length}곳`;
   if (pts.length) setTimeout(() => bigMap.fitBounds(bigLayer.getBounds().pad(0.2), { maxZoom: 15 }), 80);
 }
 document.addEventListener("click", e => {
@@ -477,9 +591,9 @@ $("#importInput").onchange = async e => {
 };
 $("#btnCSV").onclick = () => {
   if (DB.mode === "pc") { location.href = "/api/export.csv"; return; }
-  const head = ["방문일시", "농가명", "농가주", "연락처", "이메일", "주소", "위도", "경도", "작물", "면적", "구분", "병해충명", "심각도", "증상", "진단", "대처방안", "비고", "처리상태", "사진수"];
+  const head = ["방문일시", "농가명", "농가주", "연락처", "이메일", "주소", "위도", "경도", "작물", "면적", "구분", "병해충명", "심각도", "증상", "진단", "대처방안", "비고", "처리상태", "사진수", "AI추론"];
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = records.map(x => [x.visitedAt, x.farmName, x.farmer, x.phone, x.email, x.address, x.lat, x.lng, x.crop, x.area, x.category, x.pestName, x.severity, x.symptoms, x.diagnosis, x.remedy, x.notes, x.status, (x.photos || []).length].map(q).join(","));
+  const rows = records.map(x => [x.visitedAt, x.farmName, x.farmer, x.phone, x.email, x.address, x.lat, x.lng, x.crop, x.area, x.category, x.pestName, x.severity, x.symptoms, x.diagnosis, x.remedy, x.notes, x.status, (x.photos || []).length, x.aiResult?.candidates?.[0] ? `${x.aiResult.candidates[0].name}(${x.aiResult.candidates[0].confidence}%)` : ""].map(q).join(","));
   downloadBlob(new Blob(["\ufeff" + [head.map(q).join(","), ...rows].join("\r\n")], { type: "text/csv" }), `예찰기록_${stamp()}.csv`);
 };
 
