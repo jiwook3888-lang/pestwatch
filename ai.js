@@ -2,11 +2,20 @@
 // 📷 사진 기반 병해충 추론 (Claude API)
 // API 키는 이 기기(브라우저) 안에만 저장되며, 사진은 추론할 때만 Anthropic API로 전송됩니다.
 window.PestAI = (() => {
-  const KEY = "pestwatch.apiKey";
+  const KEY = "pestwatch.apiKey";          // Claude (유료)
+  const GKEY = "pestwatch.geminiKey";       // Google Gemini (무료 등급)
+  const EKEY = "pestwatch.aiEngine";        // "gemini" | "claude"
   const MODEL = "claude-opus-5-5";
+  const GEMINI_MODEL = "gemini-3.8-flash";
 
-  const getKey = () => { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } };
-  const setKey = k => { try { k ? localStorage.setItem(KEY, k.trim()) : localStorage.removeItem(KEY); } catch (e) { } };
+  const ls = (k, v) => { try { if (v === undefined) return localStorage.getItem(k) || ""; v ? localStorage.setItem(k, v.trim()) : localStorage.removeItem(k); } catch (e) { return ""; } };
+  const getKey = () => ls(KEY);
+  const setKey = k => ls(KEY, k || "");
+  const getGeminiKey = () => ls(GKEY);
+  const setGeminiKey = k => ls(GKEY, k || "");
+  const getEngine = () => ls(EKEY) || "gemini";
+  const setEngine = e => ls(EKEY, e);
+  const ready = () => getEngine() === "claude" ? !!getKey() : !!getGeminiKey();
 
   // API로 보낼 사진은 긴 변 1568px JPEG로 맞춤
   function toB64(blob, max = 1568) {
@@ -66,7 +75,41 @@ window.PestAI = (() => {
 - 과수화상병 등 국가관리 검역병이 의심되면 caution에 즉시 신고 필요를 적으세요.
 - 모든 문장은 한국어로, 농가에 전달할 수 있게 쉽고 간결하게 쓰세요.`;
 
-  async function diagnose({ crop, notes, blobs }) {
+  async function diagnoseGemini({ crop, notes, blobs }) {
+    const apiKey = getGeminiKey();
+    if (!apiKey) throw new Error("NO_KEY");
+    if (!window.GoogleGenAI) throw new Error("AI 모듈을 불러오지 못했습니다");
+    const ai = new window.GoogleGenAI({ apiKey });
+    const parts = [];
+    for (const b of blobs.slice(0, 4)) parts.push({ inlineData: { mimeType: "image/jpeg", data: await toB64(b) } });
+    parts.push({ text: `작목: ${crop}\n${notes ? "현장 메모: " + notes + "\n" : ""}첨부한 사진 ${parts.length}장을 보고 병해충을 추론해 주세요. 지정된 JSON 형식으로만 답하세요.` });
+    let res;
+    try {
+      res = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [{ role: "user", parts }],
+        config: { systemInstruction: SYSTEM, responseMimeType: "application/json", responseJsonSchema: SCHEMA },
+      });
+    } catch (e) {
+      const st = e?.status, msg = String(e?.message || e);
+      if (st === 400 && /API key|API_KEY/i.test(msg)) throw new Error("Gemini API 키가 올바르지 않습니다. ⚙️ 설정에서 다시 입력하세요.");
+      if (st === 403) throw new Error("Gemini API 키 권한 오류입니다. 키를 새로 발급받아 보세요.");
+      if (st === 429) throw new Error("무료 사용량(분당/일일 한도)을 넘었어요. 잠시 후 다시 시도하세요.");
+      if (!navigator.onLine || /fetch|network/i.test(msg)) throw new Error("인터넷 연결을 확인하세요. (사진 AI 추론은 인터넷이 필요합니다)");
+      throw new Error("AI 추론 실패: " + msg);
+    }
+    const text = res.text;
+    if (!text) throw new Error("AI가 답하지 않았어요. 다른 사진으로 다시 시도하세요.");
+    const out = JSON.parse(text);
+    out.candidates = (out.candidates || []).sort((a, b) => b.confidence - a.confidence);
+    out.engine = "gemini"; out.model = GEMINI_MODEL;
+    out.at = new Date().toLocaleString("ko-KR");
+    return out;
+  }
+
+  function diagnose(args) { return getEngine() === "claude" ? diagnoseClaude(args) : diagnoseGemini(args); }
+
+  async function diagnoseClaude({ crop, notes, blobs }) {
     const apiKey = getKey();
     if (!apiKey) throw new Error("NO_KEY");
     if (!window.Anthropic) throw new Error("AI 모듈을 불러오지 못했습니다");
@@ -99,10 +142,10 @@ window.PestAI = (() => {
     if (!block) throw new Error("AI 응답이 비어 있습니다");
     const out = JSON.parse(block.text);
     out.candidates = (out.candidates || []).sort((a, b) => b.confidence - a.confidence);
-    out.model = res.model;
+    out.model = res.model; out.engine = "claude";
     out.at = new Date().toLocaleString("ko-KR");
     return out;
   }
 
-  return { getKey, setKey, diagnose, MODEL };
+  return { getKey, setKey, getGeminiKey, setGeminiKey, getEngine, setEngine, ready, diagnose, MODEL, GEMINI_MODEL };
 })();

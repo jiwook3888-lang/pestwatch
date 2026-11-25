@@ -119,48 +119,41 @@ function showTab(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "list") loadList();
   if (name === "map") renderBigMap();
-  if (name === "new") setTimeout(() => formMap.invalidateSize(), 50);
+  if (name === "new") setTimeout(() => formMap?.relayout(), 50);
 }
 $$("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 
 /* ---------- 입력 지도 ---------- */
-const formMap = L.map("formMap").setView(DEFAULT_CENTER, 7);
-L.tileLayer(TILE_URL, TILE_OPT).addTo(formMap);
-let formMarker = null;
+let formMap = null;
+function initFormMap() {
+  if (formMap) formMap.destroy();
+  $("#formMap").innerHTML = ""; $("#formMap").className = "map small";
+  formMap = GeoKit.createMap($("#formMap"), { center: DEFAULT_CENTER, zoom: 7, onClick: (la, ln) => setFormPoint(la, ln, { zoom: false }) });
+  const f = $("#recForm"), la = parseFloat(f.lat.value), ln = parseFloat(f.lng.value);
+  if (!isNaN(la) && !isNaN(ln)) setFormPoint(la, ln, { reverse: false });
+}
 function setFormPoint(lat, lng, { zoom = true, reverse = true } = {}) {
   const f = $("#recForm");
   f.lat.value = (+lat).toFixed(6); f.lng.value = (+lng).toFixed(6);
-  if (!formMarker) {
-    formMarker = L.marker([lat, lng], { draggable: true }).addTo(formMap);
-    formMarker.on("dragend", e => { const p = e.target.getLatLng(); setFormPoint(p.lat, p.lng, { zoom: false }); });
-  } else formMarker.setLatLng([lat, lng]);
-  if (zoom) formMap.setView([lat, lng], Math.max(formMap.getZoom(), 16));
+  formMap.setMarker(lat, lng, (la, ln) => setFormPoint(la, ln, { zoom: false }));
+  if (zoom) formMap.setView(lat, lng, Math.max(formMap.getZoom(), 16));
   if (reverse) reverseGeocode(lat, lng);
 }
-formMap.on("click", e => setFormPoint(e.latlng.lat, e.latlng.lng, { zoom: false }));
 ["lat", "lng"].forEach(n => $("#recForm")[n].addEventListener("change", () => {
   const f = $("#recForm"); const la = parseFloat(f.lat.value), ln = parseFloat(f.lng.value);
   if (!isNaN(la) && !isNaN(ln)) setFormPoint(la, ln);
 }));
 
-function fmtAddr(j) {
-  const a = j.address || {};
-  // 한국식 주소 조합 (도/시군구/읍면동/리/번지)
-  const parts = [a.province || a.state, a.city || a.county, a.borough, a.town || a.suburb || a.village, a.quarter, a.hamlet, a.road, a.house_number]
-    .filter(Boolean);
-  const uniq = parts.filter((p, i) => parts.indexOf(p) === i);
-  return uniq.length ? uniq.join(" ") : (j.display_name || "");
-}
 async function reverseGeocode(lat, lng) {
   const f = $("#recForm");
-  $("#locStatus").textContent = "주소 확인 중…";
+  $("#locStatus").textContent = "🏠 주소 확인 중…";
   try {
-    const j = await DB.reverse(lat, lng);
-    const addr = fmtAddr(j);
-    if (addr) f.address.value = addr;
-    $("#locStatus").textContent = "✅ 위치·주소 기록 완료";
+    const a = await GeoKit.reverse(lat, lng);
+    f.address.value = a.road || a.jibun || f.address.value;
+    f.jibun.value = a.jibun || "";
+    $("#locStatus").textContent = a.road ? "✅ 위치·도로명주소 기록 완료" : "✅ 위치 기록 완료 (도로명주소가 없는 곳이면 📮 도로명주소 찾기로 보완하세요)";
   } catch (e) {
-    $("#locStatus").textContent = "좌표는 기록됨 (주소 자동조회 실패 — 직접 입력하세요)";
+    $("#locStatus").textContent = "📍 좌표는 기록됨 (주소 자동조회 실패 — 📮 도로명주소 찾기 또는 직접 입력)";
   }
 }
 
@@ -185,19 +178,34 @@ $("#btnLocate").onclick = () => {
 
 async function addrSearch() {
   const q = $("#addrSearch").value.trim(); if (!q) return;
-  const box = $("#searchResults"); box.innerHTML = '<div class="muted">검색 중…</div>';
+  const box = $("#searchResults"); box.innerHTML = '<div class="muted">🔎 검색 중…</div>';
   try {
-    const list = await DB.search(q);
-    if (!list.length) { box.innerHTML = '<div class="muted">검색 결과가 없습니다. 읍·면·리 단위로 검색해 보세요.</div>'; return; }
-    box.innerHTML = list.map((x, i) => `<div data-i="${i}">${esc(x.display_name)}</div>`).join("");
-    $$("div[data-i]", box).forEach(d => d.onclick = () => {
+    const list = await GeoKit.search(q);
+    if (!list.length) { box.innerHTML = '<div class="muted">검색 결과가 없어요. 도로명+건물번호(예: ○○로 123)나 📮 도로명주소 찾기를 이용해 보세요.</div>'; return; }
+    box.innerHTML = list.map((x, i) => `<div data-i="${i}">${esc(x.kind)} <b>${esc(x.name || x.road || x.jibun)}</b>${x.road && x.name ? `<small>${esc(x.road)}</small>` : ""}${x.jibun && x.jibun !== (x.name || x.road || x.jibun) ? `<small>지번 ${esc(x.jibun)}</small>` : ""}</div>`).join("");
+    $$("div[data-i]", box).forEach(d => d.onclick = async () => {
       const x = list[d.dataset.i]; box.innerHTML = "";
-      setFormPoint(+x.lat, +x.lon, { reverse: false });
-      $("#recForm").address.value = q;
-      $("#locStatus").textContent = "검색 위치로 지정됨 (마커를 끌어 미세 조정 가능)";
+      setFormPoint(x.lat, x.lng, { reverse: !x.road });
+      const f = $("#recForm");
+      if (x.road) { f.address.value = x.road + (x.name && !x.road.includes(x.name) ? ` (${x.name})` : ""); f.jibun.value = x.jibun || ""; }
+      $("#locStatus").textContent = "✅ 검색 위치로 지정됨 (핀을 끌어 미세 조정 가능)";
     });
   } catch (e) { box.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
+$("#btnPostcode").onclick = async () => {
+  $("#postModal").classList.remove("hidden");
+  try {
+    await GeoKit.openPostcode($("#postWrap"), async d => {
+      $("#postModal").classList.add("hidden");
+      const f = $("#recForm");
+      f.address.value = d.road; f.jibun.value = d.jibun || "";
+      const p = await GeoKit.geocode(d.roadOnly);
+      if (p) { setFormPoint(p.lat, p.lng, { reverse: false }); $("#locStatus").textContent = "✅ 도로명주소와 위치를 지정했어요."; }
+      else $("#locStatus").textContent = "✅ 도로명주소 입력됨 (지도 위치는 직접 눌러 지정하세요)";
+    });
+  } catch (e) { $("#postWrap").innerHTML = `<p class="muted">도로명주소 검색을 불러오지 못했어요. 인터넷 연결을 확인하세요.</p>`; }
+};
+$("#postClose").onclick = () => $("#postModal").classList.add("hidden");
 $("#btnAddrSearch").onclick = addrSearch;
 $("#addrSearch").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addrSearch(); } });
 
@@ -284,8 +292,8 @@ $("#refQ").oninput = renderRef;
 /* ---------- 🤖 AI 추론 ---------- */
 function aiHTML(a, interactive = true) {
   const c = a.candidates || [];
-  return `<div class="ai-card"><h4>🤖 AI 병해충 추론 결과</h4>
-    <div class="ai-meta">${esc(a.at || "")} · 🌾 입력 작목: ${esc(a.crop || "")} · 참고용 결과예요</div>
+  return `<div class="ai-card"><h4>${a.engine === "symptom" ? "📋" : "🤖"} 병해충 추론 결과</h4>
+    <div class="ai-meta"><span class="eng">${a.engine === "symptom" ? "📋 증상 체크 추론" : a.engine === "claude" ? "🤖 Claude 사진 추론" : "🤖 Gemini 사진 추론"}</span> · ${esc(a.at || "")} · 🌾 ${esc(a.crop || "")} · 참고용</div>
     ${a.caution ? `<div class="ai-warn">🚨 ${esc(a.caution)}</div>` : ""}
     ${c.map((x, i) => `<div class="cand ${i === 0 ? "top" : ""}"><div class="cand-h"><span class="rank">${i + 1}순위</span><b>${CAT_EM[x.category] || ""} ${esc(x.name)}</b><span class="muted small">${esc(x.category)}</span>
         ${interactive ? `<button type="button" class="ghost" data-apply="${i}" style="margin-left:auto;padding:6px 10px">✅ 이걸로 적용</button>` : ""}</div>
@@ -329,8 +337,8 @@ $("#btnAI").onclick = async () => {
   const crop = f.crop.value.trim();
   if (!crop) { toast("🌾 작목을 먼저 입력해 주세요."); f.crop.focus(); return; }
   if (!pendingPhotos.length && !existingPhotos.length) { toast("📸 사진을 먼저 첨부해 주세요."); return; }
-  if (!PestAI.getKey()) { toast("⚙️ 설정에서 AI API 키를 먼저 입력해 주세요."); openSettings(); return; }
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> AI가 사진을 살펴보는 중… (10~40초)';
+  if (!PestAI.ready()) { toast("⚙️ 설정에서 무료 Gemini API 키를 먼저 넣어 주세요. (키 없이 쓰려면 📋 증상 체크 추론)"); openSettings(); return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 사진 분석 중… (10~40초)';
   try {
     const res = await PestAI.diagnose({ crop, notes: f.notes.value.trim(), blobs: await photoBlobs() });
     res.crop = crop;
@@ -338,31 +346,69 @@ $("#btnAI").onclick = async () => {
     $("#aiResult").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     if (e.message === "NO_KEY") openSettings(); else alert("🤖 " + e.message);
-  } finally { btn.disabled = false; btn.innerHTML = "🤖 AI로 병해충 추론하기"; }
+  } finally { btn.disabled = false; btn.innerHTML = "🤖 사진 AI 추론<small>무료 Gemini · 인터넷 필요</small>"; }
+};
+
+/* ---------- 📋 증상 체크 추론 ---------- */
+const symSel = new Set();
+$("#btnSym").onclick = () => {
+  const p = $("#symPanel"); p.classList.toggle("hidden");
+  if (!p.classList.contains("hidden")) { SymptomCheck.renderChips($("#symChips"), symSel); p.scrollIntoView({ behavior: "smooth", block: "start" }); }
+};
+$("#btnSymClear").onclick = () => { symSel.clear(); SymptomCheck.renderChips($("#symChips"), symSel); };
+$("#btnSymRun").onclick = () => {
+  const f = $("#recForm"), crop = f.crop.value.trim();
+  if (!crop) { toast("🌾 작목을 먼저 입력해 주세요."); f.crop.focus(); return; }
+  try {
+    const res = SymptomCheck.infer({ crop, selected: symSel });
+    res.crop = crop; currentAI = res; renderAI();
+    $("#symPanel").classList.add("hidden");
+    $("#aiResult").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) { toast("📋 " + e.message); }
 };
 
 /* ---------- ⚙️ 설정 ---------- */
-function openSettings() {
-  const k = PestAI.getKey();
-  $("#apiKeyInput").value = "";
-  $("#apiKeyInput").placeholder = k ? `저장됨 (${k.slice(0, 10)}…${k.slice(-4)})` : "sk-ant-...";
+function syncEngineUI() {
+  const eng = PestAI.getEngine();
+  $$('#engineSeg input').forEach(i => i.checked = i.value === eng);
+  $("#geminiBox").classList.toggle("hidden", eng !== "gemini");
+  $("#claudeBox").classList.toggle("hidden", eng !== "claude");
+  const k = eng === "claude" ? PestAI.getKey() : PestAI.getGeminiKey();
+  const inp = eng === "claude" ? $("#apiKeyInput") : $("#geminiKeyInput");
+  inp.value = ""; inp.placeholder = k ? `저장됨 (${k.slice(0, 6)}…${k.slice(-4)})` : (eng === "claude" ? "sk-ant-..." : "AIza...");
   $("#keyState").className = "status " + (k ? "ok" : "");
-  $("#keyState").textContent = k ? "✅ API 키가 저장되어 있어요." : "🔑 아직 API 키가 없어요.";
+  $("#keyState").textContent = k ? "✅ 키가 저장되어 있어요." : "🔑 아직 키가 없어요. (키 없이도 📋 증상 체크 추론은 쓸 수 있어요)";
+}
+function openSettings() {
+  syncEngineUI();
+  $("#originText").textContent = location.origin;
+  const kk = GeoKit.getKakaoKey();
+  $("#kakaoKeyInput").value = ""; $("#kakaoKeyInput").placeholder = kk ? `저장됨 (${kk.slice(0, 4)}…${kk.slice(-4)})` : "32자리 키";
+  $("#kakaoState").className = "status " + (GeoKit.provider === "kakao" ? "ok" : kk ? "err" : "");
+  $("#kakaoState").textContent = GeoKit.provider === "kakao" ? "✅ 카카오지도를 쓰고 있어요." : kk ? `⚠️ 카카오지도를 불러오지 못해 기본 지도를 쓰는 중 (${GeoKit.kakaoError}). 키와 도메인 등록을 확인하세요.` : "🗺️ 지금은 무료 OpenStreetMap 지도를 쓰고 있어요.";
   $("#modeInfo").innerHTML = DB.mode === "pc"
-    ? "💻 PC 프로그램 모드 · 기록은 exe 옆 ‘예찰데이터’ 폴더에 저장돼요."
+    ? "💻 PC 프로그램 모드 · 기록은 exe 옆 ‘예찰데이터’ 폴더에 저장돼요. 키는 PC와 휴대폰에 각각 넣어야 해요."
     : "📱 휴대폰 모드 · 기록은 이 휴대폰 브라우저 안에 저장돼요. 목록 › 📦 백업 내보내기로 PC에 옮기세요.";
   $("#settingsModal").classList.remove("hidden");
 }
+$$('#engineSeg input').forEach(i => i.onchange = () => { PestAI.setEngine(i.value); syncEngineUI(); });
 $("#btnSettings").onclick = openSettings;
 $("#settingsClose").onclick = () => $("#settingsModal").classList.add("hidden");
 $("#settingsModal").onclick = e => { if (e.target.id === "settingsModal") $("#settingsModal").classList.add("hidden"); };
 $("#btnKeySave").onclick = () => {
-  const v = $("#apiKeyInput").value.trim();
-  if (!v) { toast("API 키를 붙여넣어 주세요."); return; }
-  if (!v.startsWith("sk-ant-")) { if (!confirm("일반적인 Anthropic API 키(sk-ant-…) 형식이 아니에요. 그래도 저장할까요?")) return; }
-  PestAI.setKey(v); openSettings(); toast("🔑 API 키를 저장했어요.");
+  const eng = PestAI.getEngine();
+  const v = (eng === "claude" ? $("#apiKeyInput") : $("#geminiKeyInput")).value.trim();
+  if (!v) { toast("키를 붙여넣어 주세요."); return; }
+  eng === "claude" ? PestAI.setKey(v) : PestAI.setGeminiKey(v);
+  syncEngineUI(); toast("🔑 키를 저장했어요.");
 };
-$("#btnKeyClear").onclick = () => { PestAI.setKey(""); openSettings(); toast("API 키를 지웠어요."); };
+$("#btnKeyClear").onclick = () => { PestAI.getEngine() === "claude" ? PestAI.setKey("") : PestAI.setGeminiKey(""); syncEngineUI(); toast("키를 지웠어요."); };
+$("#btnKakaoSave").onclick = () => {
+  const v = $("#kakaoKeyInput").value.trim();
+  if (!v) { toast("카카오 JavaScript 키를 붙여넣어 주세요."); return; }
+  GeoKit.setKakaoKey(v); toast("🗺️ 저장했어요. 화면을 다시 불러옵니다…"); setTimeout(() => location.reload(), 800);
+};
+$("#btnKakaoClear").onclick = () => { GeoKit.setKakaoKey(""); toast("카카오 키를 지웠어요. 다시 불러옵니다…"); setTimeout(() => location.reload(), 800); };
 
 /* ---------- 😀 이모티콘 넣기 ---------- */
 let lastField = null;
@@ -385,14 +431,15 @@ function resetForm() {
   editingId = null; existingPhotos = []; currentAI = null; renderAI();
   pendingPhotos.forEach(p => URL.revokeObjectURL(p.url)); pendingPhotos = [];
   renderThumbs();
-  if (formMarker) { formMap.removeLayer(formMarker); formMarker = null; }
+  formMap?.clearMarker();
   $("#locStatus").textContent = ""; $("#searchResults").innerHTML = "";
   $("#editBadge").classList.add("hidden");
   $("#btnSave").textContent = "💾 저장";
   f.visitedAt.value = nowLocal();
   // 마지막 기록 위치 근처로 지도 이동
   const last = records.find(r => r.lat != null);
-  if (last) formMap.setView([last.lat, last.lng], 12);
+  if (last) formMap?.setView(last.lat, last.lng, 12);
+  f.advisor.value = (() => { try { return localStorage.getItem("pestwatch.advisor") || ""; } catch (e) { return ""; } })();
 }
 $("#btnReset").onclick = () => { if (!pendingPhotos.length || confirm("작성 중인 내용을 지울까요?")) resetForm(); };
 
@@ -405,13 +452,14 @@ $("#recForm").onsubmit = async e => {
     const num = v => v === "" ? null : Number(v);
     const rec = {
       farmName: f.farmName.value.trim(), farmer: f.farmer.value.trim(), phone: f.phone.value.trim(), email: f.email.value.trim(),
-      address: f.address.value.trim(), lat: num(f.lat.value), lng: num(f.lng.value),
+      address: f.address.value.trim(), jibun: f.jibun.value.trim(), advisor: f.advisor.value.trim(), lat: num(f.lat.value), lng: num(f.lng.value),
       visitedAt: fromInputDT(f.visitedAt.value) || fromInputDT(nowLocal()),
       crop: f.crop.value.trim(), area: f.area.value.trim(), category: f.category.value, pestName: f.pestName.value.trim(),
       severity: f.severity.value, symptoms: f.symptoms.value, diagnosis: f.diagnosis.value, remedy: f.remedy.value,
       notes: f.notes.value, status: f.status.value, photos: [...existingPhotos], aiResult: currentAI || null,
     };
     const saved = await DB.save(editingId, rec, pendingPhotos);
+    try { if (rec.advisor) localStorage.setItem("pestwatch.advisor", rec.advisor); } catch (e) { }
     toast(editingId ? "✏️ 수정했어요!" : "💾 저장했어요!");
     await refresh();
     resetForm();
@@ -425,7 +473,7 @@ function startEdit(r) {
   resetForm();
   editingId = r.id;
   const f = $("#recForm");
-  ["farmName", "farmer", "phone", "email", "address", "crop", "area", "category", "pestName", "severity", "symptoms", "diagnosis", "remedy", "notes", "status"]
+  ["farmName", "farmer", "phone", "email", "address", "jibun", "advisor", "crop", "area", "category", "pestName", "severity", "symptoms", "diagnosis", "remedy", "notes", "status"]
     .forEach(k => { if (f[k]) f[k].value = r[k] ?? ""; });
   f.visitedAt.value = toInputDT(r.visitedAt);
   if (r.lat != null && r.lng != null) setFormPoint(r.lat, r.lng, { reverse: false });
@@ -442,7 +490,7 @@ async function refresh() { records = await DB.list(); }
 function filtered() {
   const q = $("#q").value.trim(), c = $("#fCat").value, s = $("#fStatus").value, from = $("#fFrom").value, to = $("#fTo").value;
   return records.filter(r => {
-    if (q && !(r.farmName + r.farmer + r.address + r.crop + r.pestName + r.symptoms + r.notes).includes(q)) return false;
+    if (q && !(r.farmName + r.farmer + (r.advisor || "") + (r.jibun || "") + r.address + r.crop + r.pestName + r.symptoms + r.notes).includes(q)) return false;
     if (c && r.category !== c) return false;
     if (s && r.status !== s) return false;
     const d = (r.visitedAt || "").slice(0, 10);
@@ -477,7 +525,7 @@ async function loadList() { try { await refresh(); renderList(); } catch (e) { t
 /* ---------- 상세 ---------- */
 let detailMap = null;
 function detailHTML(r) {
-  const rows = [["🕒 방문일시", r.visitedAt], ["👤 농가주", r.farmer], ["📞 연락처", r.phone], ["✉️ 이메일", r.email], ["🏠 주소", r.address],
+  const rows = [["🕒 방문일시", r.visitedAt], ["👤 농가주", r.farmer], ["📞 연락처", r.phone], ["✉️ 이메일", r.email], ["🏠 도로명주소", r.address], ["🏷️ 지번주소", r.jibun], ["🧑‍🌾 담당지도사", r.advisor],
     ["📍 좌표", r.lat != null ? `${(+r.lat).toFixed(6)}, ${(+r.lng).toFixed(6)}` : ""], ["🌾 작목", r.crop], ["📐 재배면적", r.area],
     ["🔬 병해충명", r.pestName], ["👀 증상", r.symptoms], ["🩺 진단", r.diagnosis], ["💊 대처방안", r.remedy], ["📝 비고", r.notes]];
   return `<div class="detail"><h3>🏡 ${esc(r.farmName)}</h3>
@@ -493,14 +541,13 @@ function openDetail(id) {
   current = r;
   $("#detail").innerHTML = detailHTML(r);
   $("#modal").classList.remove("hidden");
-  if (detailMap) { detailMap.remove(); detailMap = null; }
+  if (detailMap) { detailMap.destroy(); detailMap = null; }
   if (r.lat != null) {
-    detailMap = L.map("detailMap").setView([r.lat, r.lng], 16);
-    L.tileLayer(TILE_URL, TILE_OPT).addTo(detailMap);
-    L.marker([r.lat, r.lng]).addTo(detailMap);
+    detailMap = GeoKit.createMap($("#detailMap"), { center: [r.lat, r.lng], zoom: 16 });
+    detailMap.setMarker(r.lat, r.lng);
   }
 }
-function closeModal() { $("#modal").classList.add("hidden"); if (detailMap) { detailMap.remove(); detailMap = null; } }
+function closeModal() { $("#modal").classList.add("hidden"); if (detailMap) { detailMap.destroy(); detailMap = null; } }
 $("#modalClose").onclick = closeModal;
 $("#modal").onclick = e => { if (e.target.id === "modal") closeModal(); };
 document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#lightbox").classList.add("hidden"); closeModal(); $("#settingsModal").classList.add("hidden"); } });
@@ -515,7 +562,7 @@ $("#btnPrint").onclick = () => {
   const row = (k, v) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`;
   $("#printArea").innerHTML = `<h1>병해충 예찰 진단 결과서</h1>
     <table>${row("농가명", r.farmName)}${row("농가주", r.farmer)}${row("연락처", r.phone)}${row("주소", r.address)}
-    ${row("방문일시", r.visitedAt)}${row("작물 / 면적", [r.crop, r.area].filter(Boolean).join(" / "))}
+    ${row("방문일시", r.visitedAt)}${r.advisor ? row("담당지도사", r.advisor) : ""}${row("작물 / 면적", [r.crop, r.area].filter(Boolean).join(" / "))}
     ${row("병해충명", `${r.pestName} (${r.category}, ${r.severity})`)}${row("증상", r.symptoms)}${row("진단", r.diagnosis)}
     ${row("대처방안", r.remedy)}${r.notes ? row("비고", r.notes) : ""}${r.aiResult?.candidates?.length ? row("AI 추론(참고)", r.aiResult.candidates.map((c, i) => `${i + 1}. ${c.name} (${c.confidence}%)\n   근거: ${(c.evidence || []).join(" / ")}`).join("\n")) : ""}</table>
     <div class="pimgs">${(r.photos || []).slice(0, 6).map(p => `<img src="${esc(P(p))}">`).join("")}</div>
@@ -525,25 +572,20 @@ $("#btnPrint").onclick = () => {
 };
 
 /* ---------- 전체 지도 ---------- */
-let bigMap = null, bigLayer = null;
+let bigMap = null;
 const SEV_COLOR = { 경미: "#2fb36a", 보통: "#f2994a", 심각: "#e5484d" };
 async function renderBigMap() {
   try { await refresh(); } catch (e) { toast(e.message); }
-  if (!bigMap) {
-    bigMap = L.map("bigMap").setView(DEFAULT_CENTER, 7);
-    L.tileLayer(TILE_URL, TILE_OPT).addTo(bigMap);
-    bigLayer = L.featureGroup().addTo(bigMap);
-  }
-  setTimeout(() => bigMap.invalidateSize(), 50);
-  bigLayer.clearLayers();
+  if (!bigMap) bigMap = GeoKit.createMap($("#bigMap"), { center: DEFAULT_CENTER, zoom: 7 });
+  setTimeout(() => bigMap.relayout(), 50);
   const pts = records.filter(r => r.lat != null && r.lng != null);
-  pts.forEach(r => {
-    const icon = L.divIcon({ className: "", html: `<div class="pin" style="background:${SEV_COLOR[r.severity] || "#607d8b"}"><span>${CAT_EM[r.category] || "🌱"}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
-    L.marker([r.lat, r.lng], { icon }).addTo(bigLayer)
-      .bindPopup(`<b>🏡 ${esc(r.farmName)}</b><br>🕒 ${esc(r.visitedAt?.slice(0, 10))} · 🌾 ${esc(r.crop)}<br>${CAT_EM[r.category] || ""} ${esc(r.pestName)} <span class="sev ${esc(r.severity)}">${SEV_EM[r.severity] || ""} ${esc(r.severity)}</span><br><a href="#" data-open="${esc(r.id)}">🔎 상세 보기</a>`);
-  });
-  $("#mapCount").textContent = `📍 ${pts.length}곳`;
-  if (pts.length) setTimeout(() => bigMap.fitBounds(bigLayer.getBounds().pad(0.2), { maxZoom: 15 }), 80);
+  bigMap.setPins(pts.map(r => ({
+    lat: r.lat, lng: r.lng,
+    html: `<div class="pin" style="background:${SEV_COLOR[r.severity] || "#607d8b"}"><span>${CAT_EM[r.category] || "🌱"}</span></div>`,
+    popup: `<b>🏡 ${esc(r.farmName)}</b><br>🕒 ${esc(r.visitedAt?.slice(0, 10))} · 🌾 ${esc(r.crop)}<br>${CAT_EM[r.category] || ""} ${esc(r.pestName)} <span class="sev ${esc(r.severity)}">${SEV_EM[r.severity] || ""} ${esc(r.severity)}</span>${r.advisor ? `<br>🧑‍🌾 ${esc(r.advisor)}` : ""}<br><a href="#" data-open="${esc(r.id)}">🔎 상세 보기</a>`,
+  })));
+  $("#mapCount").textContent = `📍 ${pts.length}곳 · ${GeoKit.provider === "kakao" ? "카카오지도" : "OpenStreetMap"}`;
+  if (pts.length) setTimeout(() => bigMap.fitPins(), 120);
 }
 document.addEventListener("click", e => {
   const a = e.target.closest("a[data-open]");
@@ -591,9 +633,9 @@ $("#importInput").onchange = async e => {
 };
 $("#btnCSV").onclick = () => {
   if (DB.mode === "pc") { location.href = "/api/export.csv"; return; }
-  const head = ["방문일시", "농가명", "농가주", "연락처", "이메일", "주소", "위도", "경도", "작물", "면적", "구분", "병해충명", "심각도", "증상", "진단", "대처방안", "비고", "처리상태", "사진수", "AI추론"];
+  const head = ["방문일시", "담당지도사", "농가명", "농가주", "연락처", "이메일", "도로명주소", "지번주소", "위도", "경도", "작물", "면적", "구분", "병해충명", "심각도", "증상", "진단", "대처방안", "비고", "처리상태", "사진수", "AI추론"];
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = records.map(x => [x.visitedAt, x.farmName, x.farmer, x.phone, x.email, x.address, x.lat, x.lng, x.crop, x.area, x.category, x.pestName, x.severity, x.symptoms, x.diagnosis, x.remedy, x.notes, x.status, (x.photos || []).length, x.aiResult?.candidates?.[0] ? `${x.aiResult.candidates[0].name}(${x.aiResult.candidates[0].confidence}%)` : ""].map(q).join(","));
+  const rows = records.map(x => [x.visitedAt, x.advisor, x.farmName, x.farmer, x.phone, x.email, x.address, x.jibun, x.lat, x.lng, x.crop, x.area, x.category, x.pestName, x.severity, x.symptoms, x.diagnosis, x.remedy, x.notes, x.status, (x.photos || []).length, x.aiResult?.candidates?.[0] ? `${x.aiResult.candidates[0].name}(${x.aiResult.candidates[0].confidence}%)` : ""].map(q).join(","));
   downloadBlob(new Blob(["\ufeff" + [head.map(q).join(","), ...rows].join("\r\n")], { type: "text/csv" }), `예찰기록_${stamp()}.csv`);
 };
 
@@ -608,6 +650,9 @@ $("#btnCSV").onclick = () => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => { });
   }
+  await GeoKit.init({ nominatim: { reverse: (la, ln) => DB.reverse(la, ln), search: q => DB.search(q) } });
+  initFormMap();
   try { await refresh(); } catch (e) { toast("기록 불러오기 실패: " + e.message); }
   resetForm();
+  if (GeoKit.getKakaoKey() && GeoKit.provider !== "kakao") toast("⚠️ 카카오지도를 불러오지 못해 기본 지도로 열었어요. ⚙️ 설정을 확인하세요.", 4500);
 })();

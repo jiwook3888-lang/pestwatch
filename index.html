@@ -39,9 +39,10 @@
         <button type="button" class="primary big wide" id="btnLocate">📍 지금 위치 기록하기</button>
         <div id="locStatus" class="status"></div>
         <div class="row">
-          <input id="addrSearch" placeholder="🔎 주소·지명으로 찾기 (예: ○○면 ○○리 123)">
+          <input id="addrSearch" placeholder="🔎 통합검색: 농장·건물명, 도로명, 지번 (예: ○○로 123)">
           <button type="button" id="btnAddrSearch">검색</button>
         </div>
+        <button type="button" class="wide" id="btnPostcode">📮 도로명주소 찾기 (우편번호 검색)</button>
         <div id="searchResults" class="search-results"></div>
         <div id="formMap" class="map small"></div>
         <p class="hint">👆 지도를 누르거나 핀을 끌어서 위치를 고칠 수 있어요.</p>
@@ -49,7 +50,8 @@
           <label>위도<input name="lat" type="number" step="any"></label>
           <label>경도<input name="lng" type="number" step="any"></label>
         </div>
-        <label>🏠 주소<input name="address" placeholder="위치 기록 시 자동 입력"></label>
+        <label>🏠 도로명주소<input name="address" placeholder="위치 기록·검색 시 자동 입력"></label>
+        <label>🏷️ 지번주소<input name="jibun" placeholder="자동 입력 (수정 가능)"></label>
         <label>🕒 방문일시<input name="visitedAt" type="datetime-local" step="1"></label>
         <div class="grid2">
           <label>🏡 농가명 <em>*</em><input name="farmName" required placeholder="예: ○○농원"></label>
@@ -57,6 +59,7 @@
           <label>📞 연락처<input name="phone" inputmode="tel" placeholder="010-0000-0000"></label>
           <label>✉️ 이메일<input name="email" type="email" placeholder="진단결과 송부용"></label>
         </div>
+        <label>🧑‍🌾 담당지도사 <span class="tip">다음 기록에도 자동 입력</span><input name="advisor" placeholder="예: 홍길동 지도사"></label>
       </div>
     </div>
 
@@ -73,8 +76,16 @@
         </div>
         <div id="dropZone" class="drop pc-only">🖱️ 사진 파일을 여기로 끌어 놓거나 Ctrl+V로 붙여넣기</div>
         <div id="photoPreview" class="thumbs"></div>
-        <button type="button" class="ai-btn big wide" id="btnAI">🤖 AI로 병해충 추론하기</button>
-        <p class="hint">작목과 사진을 넣고 누르면 AI가 병해충 후보와 판단 근거를 알려줘요. 결과는 참고용이며 최종 판단은 담당자가 합니다.</p>
+        <div class="infer-btns">
+          <button type="button" class="ai-btn big" id="btnAI">🤖 사진 AI 추론<small>무료 Gemini · 인터넷 필요</small></button>
+          <button type="button" class="sym-btn big" id="btnSym">📋 증상 체크 추론<small>무료 · 키·인터넷 불필요</small></button>
+        </div>
+        <div id="symPanel" class="sym-panel hidden">
+          <p class="hint">👀 현장에서 보이는 증상을 모두 눌러 주세요.</p>
+          <div id="symChips"></div>
+          <div class="actions"><button type="button" class="ghost" id="btnSymClear">초기화</button><button type="button" class="primary" id="btnSymRun">📋 이 증상으로 추론</button></div>
+        </div>
+        <p class="hint">결과는 참고용이며 최종 판단은 담당 지도사가 합니다.</p>
         <div id="aiResult"></div>
       </div>
 
@@ -175,9 +186,26 @@
     <button class="close" id="settingsClose" aria-label="닫기">✕</button>
     <h3>⚙️ 설정</h3>
     <div class="set-block">
-      <h4>🤖 AI 병해충 추론</h4>
-      <p class="muted">사진으로 병해충을 추론하려면 Anthropic(Claude) API 키가 필요해요. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>에서 발급받아 붙여넣으세요. 키는 이 기기 안에만 저장됩니다.</p>
-      <label>API 키<input id="apiKeyInput" type="password" placeholder="sk-ant-..." autocomplete="off"></label>
+      <h4>🗺️ 카카오지도 · 도로명주소</h4>
+      <p class="muted small">키가 없으면 무료 OpenStreetMap 지도로 동작해요. 카카오지도와 도로명주소 자동 변환을 쓰려면 <a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">카카오 개발자센터</a>에서 앱을 만들고 <b>JavaScript 키</b>를 붙여넣으세요. (무료)<br>앱 설정 › 플랫폼 › Web 사이트 도메인에 아래 주소를 등록해야 해요:<br><code id="originText"></code></p>
+      <label>카카오 JavaScript 키<input id="kakaoKeyInput" type="password" placeholder="32자리 키" autocomplete="off"></label>
+      <div id="kakaoState" class="status"></div>
+      <div class="actions"><button type="button" id="btnKakaoClear" class="ghost">지우기</button><button type="button" id="btnKakaoSave" class="primary">저장 후 다시 불러오기</button></div>
+    </div>
+    <div class="set-block">
+      <h4>🤖 사진 AI 추론</h4>
+      <div class="seg" id="engineSeg">
+        <label><input type="radio" name="engine" value="gemini"> 🆓 Google Gemini (무료)</label>
+        <label><input type="radio" name="engine" value="claude"> 💳 Claude (유료)</label>
+      </div>
+      <div id="geminiBox">
+        <p class="muted small"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>에 구글 계정으로 로그인 › <b>Create API key</b>로 무료 키를 받아 붙여넣으세요. 결제 등록 없이 하루 사용 한도 안에서 무료이며, 무료 등급에서는 보낸 사진이 구글 서비스 개선에 쓰일 수 있어요.</p>
+        <label>Gemini API 키<input id="geminiKeyInput" type="password" placeholder="AIza..." autocomplete="off"></label>
+      </div>
+      <div id="claudeBox">
+        <p class="muted small"><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic 콘솔</a>에서 발급(결제 필요, 1회 소액).</p>
+        <label>Claude API 키<input id="apiKeyInput" type="password" placeholder="sk-ant-..." autocomplete="off"></label>
+      </div>
       <div id="keyState" class="status"></div>
       <div class="actions">
         <button type="button" id="btnKeyClear" class="ghost">지우기</button>
@@ -188,12 +216,23 @@
   </div>
 </div>
 
+<div id="postModal" class="modal hidden">
+  <div class="modal-box narrow post-box">
+    <button class="close" id="postClose" aria-label="닫기">✕</button>
+    <h3>📮 도로명주소 찾기</h3>
+    <div id="postWrap" class="post-wrap"><p class="muted">불러오는 중…</p></div>
+  </div>
+</div>
+
 <div id="lightbox" class="lightbox hidden"><img id="lightImg" alt=""></div>
 <div id="toast" class="toast hidden"></div>
 <div id="printArea"></div>
 
 <script src="leaflet/leaflet.js"></script>
 <script src="vendor/anthropic.js"></script>
+<script src="vendor/genai.js"></script>
+<script src="maps.js"></script>
+<script src="symptoms.js"></script>
 <script src="pests.js"></script>
 <script src="ai.js"></script>
 <script src="app.js"></script>
