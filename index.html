@@ -67,7 +67,7 @@
       <div class="card">
         <div class="card-h"><span class="step">2</span><h2>📷 작목 · 사진 · AI 추론</h2></div>
         <div class="grid2">
-          <label>🌾 작목 <em>*</em> <span class="tip">직접 입력</span><input name="crop" required placeholder="예: 고추, 사과(부사), 시설딸기"></label>
+          <label>🌾 작목 <em>*</em> <span class="tip">직접 입력</span><input name="crop" list="cropList" required placeholder="예: 고추, 사과(부사), 시설딸기"></label>
           <label>📐 재배면적<input name="area" placeholder="예: 시설 1,650㎡"></label>
         </div>
         <div class="photo-btns">
@@ -105,6 +105,11 @@
             <button type="button" id="btnFillRef" title="참고자료의 증상/진단/대처방안 불러오기">📖 참고</button>
           </div>
         </label>
+        <div class="rda-btns">
+          <button type="button" id="btnRdaInfo">📚 농진청 병해충 정보</button>
+          <button type="button" id="btnRdaPesti">💊 등록농약 찾기</button>
+        </div>
+        <div id="rdaPanel" class="rda-panel hidden"></div>
         <div class="emoji-bar" id="emojiBar" title="누르면 커서 위치에 이모티콘이 들어가요"></div>
         <label>👀 증상<textarea name="symptoms" rows="3"></textarea></label>
         <label>🩺 진단<textarea name="diagnosis" rows="3"></textarea></label>
@@ -122,6 +127,7 @@
   </div>
   </form>
   <datalist id="pestList"></datalist>
+  <datalist id="cropList"></datalist>
 </section>
 
 <!-- 목록 -->
@@ -160,7 +166,10 @@
 <section id="tab-ref" class="tab">
   <div class="card">
     <p class="notice">💡 현장 기록을 돕는 일반 안내예요. 약제는 <b>농약안전정보시스템(psis.rda.go.kr)</b>에서 작목별 등록약제·안전사용기준을 확인하고, 판단이 어려우면 정밀진단을 의뢰하세요.</p>
-    <input id="refQ" placeholder="🔎 병해충명·작목 검색">
+    <input id="refQ" placeholder="🔎 병해충명·작목 검색 (예: 탄저병, 고추)">
+    <div id="rdaRefInfo" class="muted small"></div>
+    <div id="rdaRefList" class="rda-ref-list"></div>
+    <h4 class="sub-h">📖 현장 참고 요약 (내장 17종)</h4>
     <div id="refList" class="ref-list"></div>
   </div>
 </section>
@@ -185,6 +194,24 @@
   <div class="modal-box narrow">
     <button class="close" id="settingsClose" aria-label="닫기">✕</button>
     <h3>⚙️ 설정</h3>
+    <div class="set-block">
+      <h4>📚 농촌진흥청 작물·병해충·농약 정보</h4>
+      <div id="rdaState" class="status"></div>
+      <div id="rdaPcBox">
+        <p class="muted small">무료 키 2개를 넣고 <b>전체 내려받기</b>를 한 번 누르면 농진청에 등록된 작물·병해충 목록과 등록농약 정보(약 9만 건)를 PC에 저장해요. 10~20분 걸리고, 그 뒤로는 인터넷 없이 찾아볼 수 있어요.<br>
+        ① 병해충 키: <a href="https://ncpms.rda.go.kr/npms/OpenApiInfo.np" target="_blank" rel="noopener">국가농작물병해충관리시스템(NCPMS)</a> 회원가입 › OpenAPI 신청<br>
+        ② 농약 키: <a href="https://psis.rda.go.kr/psis/share/api/apiReqstLoginForm.ps?menuId=PS00382" target="_blank" rel="noopener">농약안전정보시스템(PSIS)</a> 회원가입 › 공공데이터개방 › OpenAPI 신청</p>
+        <label>NCPMS 병해충 API 키<input id="ncpmsKeyInput" type="password" autocomplete="off"></label>
+        <label>PSIS 농약 API 키<input id="psisKeyInput" type="password" autocomplete="off"></label>
+        <div class="actions"><button type="button" id="btnRdaKeySave">키 저장</button><button type="button" id="btnRdaSync" class="primary">⬇️ 전체 내려받기</button></div>
+        <div id="rdaProg" class="prog hidden"><i></i></div>
+        <div class="actions" style="margin-top:8px"><a class="btn" id="btnRdaExport" href="/api/rda/db?download=1">📤 휴대폰용 DB 파일 내보내기</a></div>
+      </div>
+      <div id="rdaMobileBox">
+        <p class="muted small">PC 프로그램 ⚙️ 설정에서 <b>📤 휴대폰용 DB 파일 내보내기</b>로 만든 파일을 카톡·메일로 받아 여기서 가져오세요.</p>
+      </div>
+      <div class="actions"><label class="btn">📥 농진청 DB 파일 가져오기<input type="file" id="rdaImport" accept=".json,application/json" hidden></label></div>
+    </div>
     <div class="set-block">
       <h4>🗺️ 카카오지도 · 도로명주소</h4>
       <p class="muted small">키가 없으면 무료 OpenStreetMap 지도로 동작해요. 카카오지도와 도로명주소 자동 변환을 쓰려면 <a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">카카오 개발자센터</a>에서 앱을 만들고 <b>JavaScript 키</b>를 붙여넣으세요. (무료)<br>앱 설정 › 플랫폼 › Web 사이트 도메인에 아래 주소를 등록해야 해요:<br><code id="originText"></code></p>
@@ -239,6 +266,7 @@
 <script src="symptoms.js"></script>
 <script src="vendor/tf.min.js"></script>
 <script src="leafmodel.js"></script>
+<script src="rda.js"></script>
 <script src="pests.js"></script>
 <script src="ai.js"></script>
 <script src="app.js"></script>

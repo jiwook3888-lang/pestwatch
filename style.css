@@ -246,3 +246,26 @@ code{background:#f1f4f2;padding:2px 6px;border-radius:6px;font-size:12.5px;word-
 .kpop-x{position:absolute;top:4px;right:4px;border:0;background:transparent;padding:2px 6px;font-size:12px}
 .ai-meta .eng{font-weight:700}
 @media(max-width:760px){.post-wrap{height:calc(100vh - 120px)}.infer-btns{grid-template-columns:1fr}}
+
+/* v1.4 농진청 */
+.rda-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:4px 0 6px}
+.rda-panel{border:1.5px solid #cfe3d7;background:var(--g-ll);border-radius:16px;padding:14px;margin:8px 0}
+.rda-panel h4{margin:0 0 8px}
+.rda-fields dt{font-weight:800;margin-top:10px;font-size:14px}
+.rda-fields dd{margin:4px 0 0;white-space:pre-wrap;font-size:14px}
+.rda-imgs{display:flex;gap:6px;overflow-x:auto;margin:8px 0}
+.rda-imgs img{height:90px;border-radius:8px}
+.ptable-wrap{overflow-x:auto;margin-top:8px;border:1px solid var(--bd);border-radius:12px;background:#fff}
+.ptable{border-collapse:collapse;font-size:13px;min-width:760px;width:100%}
+.ptable th{background:#f3f6f4;text-align:left;padding:7px 8px;white-space:nowrap;position:sticky;top:0}
+.ptable td{padding:7px 8px;border-top:1px solid #eef2ef;vertical-align:top}
+.ptable td.n{white-space:nowrap}
+.ptable tr:hover td{background:var(--g-ll)}
+.prog{height:10px;background:#e7efe9;border-radius:99px;overflow:hidden;margin-top:10px}
+.prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,#2fb36a,#1f7a4d);transition:width .3s}
+.rda-ref-list{display:flex;flex-direction:column;gap:6px;margin:10px 0 18px}
+.rda-item{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--bd);border-radius:12px;background:#fff;cursor:pointer}
+.rda-item:hover{background:var(--g-ll)}
+.rda-item b{font-size:15px}
+.sub-h{margin:16px 0 8px}
+@media(max-width:760px){.rda-btns{grid-template-columns:1fr}}

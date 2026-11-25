@@ -54,8 +54,13 @@ const Local = {
   mode: "mobile", db: null, urls: {},
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open("pestwatch", 1);
-      r.onupgradeneeded = () => { r.result.createObjectStore("records", { keyPath: "id" }); r.result.createObjectStore("photos"); };
+      const r = indexedDB.open("pestwatch", 2);
+      r.onupgradeneeded = () => {
+        const d = r.result, has = n => d.objectStoreNames.contains(n);
+        if (!has("records")) d.createObjectStore("records", { keyPath: "id" });
+        if (!has("photos")) d.createObjectStore("photos");
+        if (!has("meta")) d.createObjectStore("meta");
+      };
       r.onsuccess = () => { this.db = r.result; res(); };
       r.onerror = () => rej(r.error);
     });
@@ -258,7 +263,17 @@ document.addEventListener("click", e => {
 $("#lightbox").onclick = () => $("#lightbox").classList.add("hidden");
 
 /* ---------- 참고자료 ---------- */
-$("#pestList").innerHTML = PEST_REF.map(p => `<option value="${esc(p.name)}">${esc(p.category)} · ${esc(p.crops)}</option>`).join("");
+function updatePestList() {
+  const crop = $("#recForm").crop.value.trim();
+  const items = new Map(PEST_REF.map(p => [p.name, `📖 ${p.category} · ${p.crops}`]));
+  if (RDA.loaded && crop) for (const [n, k] of RDA.pestNames(crop)) if (!items.has(n)) items.set(n, k);
+  $("#pestList").innerHTML = [...items].slice(0, 400).map(([n, k]) => `<option value="${esc(n)}">${esc(k)}</option>`).join("");
+}
+function updateCropList() {
+  $("#cropList").innerHTML = RDA.crops().map(c => `<option value="${esc(c)}">`).join("");
+}
+updatePestList();
+$("#recForm").crop.addEventListener("change", updatePestList);
 function fillFromRef(force) {
   const f = $("#recForm");
   const name = f.pestName.value.trim();
@@ -392,6 +407,7 @@ function syncEngineUI() {
 }
 function openSettings() {
   syncEngineUI();
+  refreshRdaState();
   $("#originText").textContent = location.origin;
   const kk = GeoKit.getKakaoKey();
   $("#kakaoKeyInput").value = ""; $("#kakaoKeyInput").placeholder = kk ? `저장됨 (${kk.slice(0, 4)}…${kk.slice(-4)})` : "32자리 키";
@@ -435,6 +451,157 @@ $$("#emojiBar button").forEach(b => {
     el.focus(); const p = st + b.dataset.em.length; try { el.setSelectionRange(p, p); } catch (e) { }
   };
 });
+
+/* ---------- 📚 농진청 정보 ---------- */
+function rdaNeed() {
+  const p = $("#rdaPanel"); p.classList.remove("hidden");
+  p.innerHTML = `<h4>📚 농진청 데이터가 아직 없어요</h4><p class="small">${DB.mode === "pc"
+    ? "⚙️ 설정 › 농촌진흥청 정보에서 무료 키를 넣고 ⬇️ 전체 내려받기를 눌러 주세요."
+    : "PC 프로그램에서 내려받은 뒤 📤 휴대폰용 DB 파일을 옮겨 ⚙️ 설정 › 📥 농진청 DB 파일 가져오기를 해 주세요."}</p><button type="button" class="primary" onclick="openSettings()">⚙️ 설정 열기</button>`;
+}
+function detailHTML2(p, d) {
+  const fields = (d.fields || []).filter(([k, v]) => RDA.cleanText(v) && !/key$/i.test(k) && !/^(cropName)$/.test(k));
+  return `<h4>${p.t === "충" ? "🐛" : "🦠"} ${esc(p.name)} <span class="muted small">· 🌾 ${esc(p.crop)}${p.eng ? " · " + esc(p.eng) : ""}</span></h4>
+    ${(d.images || []).length ? `<div class="rda-imgs">${d.images.slice(0, 8).map(u => `<img src="${esc(u)}" data-full="${esc(u)}" alt="" loading="lazy">`).join("")}</div>` : ""}
+    <dl class="rda-fields">${fields.map(([k, v]) => `<dt>${esc(RDA.DETAIL_LABEL[k] || k)}</dt><dd>${esc(RDA.cleanText(v))}</dd>`).join("") || '<dd class="muted">상세 내용이 없어요.</dd>'}</dl>
+    <p class="muted small">출처: 농촌진흥청 국가농작물병해충관리시스템(NCPMS)</p>`;
+}
+async function showRdaPest(p, box, withFill) {
+  box.classList.remove("hidden");
+  box.innerHTML = `<p class="muted">📚 ${esc(p.name)} 정보를 불러오는 중…</p>`;
+  try {
+    const d = await RDA.detail(p);
+    box.innerHTML = detailHTML2(p, d) + (withFill ? `<div class="actions"><button type="button" class="ghost" data-close>닫기</button><button type="button" class="primary" data-fill>📝 증상·진단·방제를 칸에 넣기</button></div>` : "");
+    box.querySelector("[data-fill]")?.addEventListener("click", () => {
+      const f = $("#recForm"), x = RDA.toForm(d);
+      if ((f.symptoms.value || f.diagnosis.value || f.remedy.value) && !confirm("증상·진단·대처방안 칸을 농진청 정보로 바꿀까요?")) return;
+      f.pestName.value = p.name; f.category.value = p.t === "충" ? "충해" : "병해";
+      if (x.symptoms) f.symptoms.value = x.symptoms;
+      if (x.diagnosis) f.diagnosis.value = x.diagnosis;
+      if (x.remedy) f.remedy.value = x.remedy;
+      toast("📚 농진청 정보를 넣었어요. 현장 상황에 맞게 고쳐 주세요.");
+    });
+    box.querySelector("[data-close]")?.addEventListener("click", () => box.classList.add("hidden"));
+  } catch (e) { box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`; }
+}
+$("#btnRdaInfo").onclick = () => {
+  const f = $("#recForm"), crop = f.crop.value.trim(), name = f.pestName.value.trim();
+  if (!RDA.loaded) return rdaNeed();
+  if (!crop || !name) { toast("🌾 작목과 🔬 병해충명을 먼저 입력해 주세요."); return; }
+  const p = RDA.findPest(crop, name);
+  if (!p) {
+    const opts = RDA.pestNames(crop).filter(([, k]) => !k.startsWith("💊")).slice(0, 40);
+    $("#rdaPanel").classList.remove("hidden");
+    $("#rdaPanel").innerHTML = `<h4>🔎 ‘${esc(crop)}’에서 ‘${esc(name)}’을(를) 찾지 못했어요</h4>${opts.length ? `<p class="small">이 작목의 농진청 병해충: </p><div class="chips">${opts.map(([n]) => `<button type="button" class="chip" data-n="${esc(n)}">${esc(n)}</button>`).join("")}</div>` : '<p class="small">이 작목의 병해충 목록이 없어요. 작목 이름을 농진청 표기(예: 고추, 사과, 벼)로 바꿔 보세요.</p>'}`;
+    $$("#rdaPanel [data-n]").forEach(b => b.onclick = () => { f.pestName.value = b.dataset.n; $("#btnRdaInfo").click(); });
+    return;
+  }
+  showRdaPest(p, $("#rdaPanel"), true);
+};
+function pestiTable(res, selectable) {
+  const show = ["pestiKorName", "pestiBrandName", "diseaseWeedName", "useName", "pestiUse", "dilutUnit", "useSuittime", "useNum", "indictSymbl", "compName"];
+  const idx = Object.fromEntries(res.cols.map((c, i) => [c, i]));
+  return `<div class="ptable-wrap"><table class="ptable"><thead><tr>${selectable ? "<th>선택</th>" : ""}${show.map(c => `<th>${esc(RDA.PESTI_LABEL[c])}</th>`).join("")}</tr></thead><tbody>${
+    res.rows.slice(0, 300).map((r, i) => `<tr>${selectable ? `<td><input type="checkbox" data-row="${i}" style="width:auto"></td>` : ""}${show.map(c => `<td class="${["dilutUnit", "useSuittime", "useNum", "useName"].includes(c) ? "n" : ""}">${esc(r[idx[c]] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+    ${res.rows.length > 300 ? `<p class="muted small">처음 300건만 보여요. 병해충명을 더 정확히 넣어 보세요.</p>` : ""}`;
+}
+$("#btnRdaPesti").onclick = async () => {
+  const f = $("#recForm"), crop = f.crop.value.trim(), pest = f.pestName.value.trim(), box = $("#rdaPanel");
+  if (!crop) { toast("🌾 작목을 먼저 입력해 주세요."); return; }
+  if (!RDA.loaded && DB.mode !== "pc") return rdaNeed();
+  box.classList.remove("hidden"); box.innerHTML = '<p class="muted">💊 등록농약을 찾는 중…</p>';
+  try {
+    const res = await RDA.pesticides(crop, pest);
+    if (!res.rows.length) { box.innerHTML = `<h4>💊 등록농약을 찾지 못했어요</h4><p class="small">‘${esc(crop)}’ ${pest ? "· ‘" + esc(pest) + "’" : ""}에 등록된 농약이 없거나 이름 표기가 달라요. 병해충명을 줄여서(예: 탄저) 다시 찾아보세요.</p>`; return; }
+    const idx = Object.fromEntries(res.cols.map((c, i) => [c, i]));
+    box.innerHTML = `<h4>💊 ${esc(crop)} ${pest ? "· " + esc(pest) : ""} 등록농약 ${res.rows.length}건 ${res.live ? '<span class="muted small">(실시간 조회)</span>' : ""}</h4>
+      <p class="muted small">사용 전 반드시 라벨과 안전사용기준(사용시기·횟수)을 확인하세요. 출처: 농약안전정보시스템(PSIS)</p>
+      ${pestiTable(res, true)}
+      <div class="actions"><button type="button" class="ghost" data-close>닫기</button><button type="button" class="primary" data-add>📝 선택한 농약을 대처방안에 넣기</button></div>`;
+    box.querySelector("[data-close]").onclick = () => box.classList.add("hidden");
+    box.querySelector("[data-add]").onclick = () => {
+      const sel = $$("input[data-row]:checked", box).map(c => res.rows[+c.dataset.row]);
+      if (!sel.length) { toast("넣을 농약을 체크해 주세요."); return; }
+      const lines = sel.map(r => `💊 ${r[idx.pestiKorName]}(${r[idx.pestiBrandName]}) — ${r[idx.dilutUnit] || ""}, ${r[idx.pestiUse] || ""} / 안전사용: ${r[idx.useSuittime] || "-"}, ${r[idx.useNum] || "-"}${r[idx.indictSymbl] ? " / 작용기작 " + r[idx.indictSymbl] : ""}`);
+      f.remedy.value = (f.remedy.value ? f.remedy.value.trimEnd() + "\n\n" : "") + "[등록농약]\n" + lines.join("\n");
+      toast(`💊 ${sel.length}건을 대처방안에 넣었어요.`);
+    };
+  } catch (e) { box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>${/키/.test(e.message) ? '<button type="button" class="primary" onclick="openSettings()">⚙️ 설정 열기</button>' : ""}`; }
+};
+
+/* 참고 탭: 농진청 병해충 검색 */
+function renderRdaRef() {
+  const q = $("#refQ").value.trim(), st = RDA.stats();
+  $("#rdaRefInfo").textContent = st ? `📚 농진청 데이터: 작물 ${st.crops.toLocaleString()}종 · 병해충 ${st.pests.toLocaleString()}건 · 등록농약 ${st.pesti.toLocaleString()}건 (${st.syncedAt || ""})` : "📚 농진청 데이터가 아직 없어요. ⚙️ 설정에서 내려받거나 가져오세요.";
+  const list = q ? RDA.search(q) : [];
+  $("#rdaRefList").innerHTML = list.map((p, i) => `<div class="rda-item" data-i="${i}"><span>${p.t === "충" ? "🐛" : "🦠"}</span><div><b>${esc(p.name)}</b> <span class="muted small">🌾 ${esc(p.crop)}${p.eng ? " · " + esc(p.eng) : ""}</span></div></div>`).join("") + (q && !list.length && st ? '<p class="muted small">농진청 목록에서 찾지 못했어요.</p>' : "");
+  $$("#rdaRefList .rda-item").forEach(el => el.onclick = () => {
+    const p = list[+el.dataset.i];
+    const box = document.createElement("div"); box.className = "rda-panel";
+    el.after(box); el.onclick = () => box.classList.toggle("hidden");
+    showRdaPest(p, box, false).then(async () => {
+      try { const res = await RDA.pesticides(p.crop, p.name); if (res.rows.length) box.insertAdjacentHTML("beforeend", `<h4>💊 등록농약 ${res.rows.length}건</h4>` + pestiTable(res, false)); } catch (e) { }
+    });
+  });
+}
+$("#refQ").addEventListener("input", () => { clearTimeout(renderRdaRef._t); renderRdaRef._t = setTimeout(renderRdaRef, 250); });
+
+/* 설정: 농진청 */
+let rdaPoll = null;
+async function refreshRdaState() {
+  const st = RDA.stats();
+  $("#rdaState").className = "status " + (st ? "ok" : "");
+  $("#rdaState").textContent = st ? `✅ 작물 ${st.crops.toLocaleString()}종 · 병해충 ${st.pests.toLocaleString()}건 · 등록농약 ${st.pesti.toLocaleString()}건 (${st.syncedAt || "가져옴"})` : "📭 아직 농진청 데이터가 없어요.";
+  $("#rdaPcBox").classList.toggle("hidden", DB.mode !== "pc");
+  $("#rdaMobileBox").classList.toggle("hidden", DB.mode === "pc");
+  if (DB.mode !== "pc") return;
+  try {
+    const k = await (await fetch("/api/rda/settings")).json();
+    $("#ncpmsKeyInput").placeholder = k.ncpmsKey ? `저장됨 (${k.ncpmsKey})` : "NCPMS에서 받은 키";
+    $("#psisKeyInput").placeholder = k.psisKey ? `저장됨 (${k.psisKey})` : "PSIS에서 받은 키";
+    const s = await (await fetch("/api/rda/status")).json();
+    showSync(s);
+  } catch (e) { }
+}
+function showSync(s) {
+  const prog = $("#rdaProg");
+  if (s.state === "running") {
+    prog.classList.remove("hidden");
+    prog.firstElementChild.style.width = s.total ? Math.round(100 * s.done / s.total) + "%" : "3%";
+    $("#rdaState").className = "status"; $("#rdaState").textContent = `⏳ ${s.step || "내려받는 중"} ${s.total ? `${(s.done || 0).toLocaleString()} / ${s.total.toLocaleString()}` : ""} — 창을 닫지 말고 기다려 주세요.`;
+    $("#btnRdaSync").disabled = true;
+    clearTimeout(rdaPoll); rdaPoll = setTimeout(async () => { try { showSync(await (await fetch("/api/rda/status")).json()); } catch (e) { } }, 2000);
+  } else {
+    $("#btnRdaSync").disabled = false; prog.classList.add("hidden");
+    if (s.state === "error") { $("#rdaState").className = "status err"; $("#rdaState").textContent = "⚠️ " + s.message; }
+    if (s.state === "done") {
+      $("#rdaState").className = "status ok"; $("#rdaState").textContent = "✅ 내려받기 완료: " + s.message;
+      RDA.init({ mode: "pc" }).then(() => { updateCropList(); updatePestList(); renderRdaRef(); });
+      s.state = "shown";
+    }
+  }
+}
+$("#btnRdaKeySave").onclick = async () => {
+  const body = { ncpmsKey: $("#ncpmsKeyInput").value.trim() || "-", psisKey: $("#psisKeyInput").value.trim() || "-" };
+  if (body.ncpmsKey === "-" && body.psisKey === "-") { toast("키를 붙여넣어 주세요."); return; }
+  await fetch("/api/rda/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  $("#ncpmsKeyInput").value = ""; $("#psisKeyInput").value = ""; toast("🔑 농진청 키를 저장했어요."); refreshRdaState();
+};
+$("#btnRdaSync").onclick = async () => {
+  if (!confirm("농진청 데이터를 전체 내려받을까요? 10~20분 정도 걸려요.")) return;
+  const r = await fetch("/api/rda/sync", { method: "POST" }); const j = await r.json();
+  if (!r.ok) { toast("⚠️ " + (j.error || "시작 실패")); return; }
+  showSync({ state: "running", step: "시작", done: 0, total: 0 });
+};
+$("#rdaImport").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try {
+    toast("📥 농진청 DB 가져오는 중…");
+    const st = await RDA.importFile(await f.text());
+    updateCropList(); updatePestList(); renderRdaRef(); refreshRdaState();
+    alert(`📚 가져오기 완료: 작물 ${st.crops}종 · 병해충 ${st.pests}건 · 등록농약 ${st.pesti}건`);
+  } catch (err) { alert("가져오기 실패: " + err.message); }
+};
 
 /* ---------- 저장 ---------- */
 function resetForm() {
@@ -664,6 +831,8 @@ $("#btnCSV").onclick = () => {
   await GeoKit.init({ nominatim: { reverse: (la, ln) => DB.reverse(la, ln), search: q => DB.search(q) } });
   initFormMap();
   setAIButton();
+  try { await RDA.init({ mode: DB.mode, idb: DB.mode === "pc" ? null : Local.db }); } catch (e) { }
+  updateCropList(); updatePestList(); renderRdaRef();
   try { await refresh(); } catch (e) { toast("기록 불러오기 실패: " + e.message); }
   resetForm();
   if (GeoKit.getKakaoKey() && GeoKit.provider !== "kakao") toast("⚠️ 카카오지도를 불러오지 못해 기본 지도로 열었어요. ⚙️ 설정을 확인하세요.", 4500);
