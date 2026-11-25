@@ -77,7 +77,7 @@
         <div id="dropZone" class="drop pc-only">🖱️ 사진 파일을 여기로 끌어 놓거나 Ctrl+V로 붙여넣기</div>
         <div id="photoPreview" class="thumbs"></div>
         <div class="infer-btns">
-          <button type="button" class="ai-btn big" id="btnAI">🤖 사진 AI 추론<small>무료 Gemini · 인터넷 필요</small></button>
+          <button type="button" class="ai-btn big" id="btnAI">📷 사진으로 추론<small>무료 · 키 불필요 · 기기 안에서 분석</small></button>
           <button type="button" class="sym-btn big" id="btnSym">📋 증상 체크 추론<small>무료 · 키·인터넷 불필요</small></button>
         </div>
         <div id="symPanel" class="sym-panel hidden">
@@ -195,8 +195,12 @@
     <div class="set-block">
       <h4>🤖 사진 AI 추론</h4>
       <div class="seg" id="engineSeg">
-        <label><input type="radio" name="engine" value="gemini"> 🆓 Google Gemini (무료)</label>
+        <label><input type="radio" name="engine" value="offline"> 📷 기기 안 판별 (무료·키 불필요)</label>
+        <label><input type="radio" name="engine" value="gemini"> 🆓 Google Gemini (무료 키)</label>
         <label><input type="radio" name="engine" value="claude"> 💳 Claude (유료)</label>
+      </div>
+      <div id="offlineBox">
+        <p class="muted small">공개 모델(PlantVillage 38종, Apache-2.0)을 기기 안에서 실행해요. 키·요금 없음, 처음 한 번 약 13MB를 받은 뒤로는 인터넷 없이도 돼요.<br>학습 작목: 사과, 포도, 복숭아, 딸기, 고추(피망), 토마토, 감자, 옥수수, 콩, 호박, 체리, 블루베리, 감귤, 라즈베리. 실험실 잎 사진으로 학습해서 현장 사진은 오차가 있을 수 있어요.</p>
       </div>
       <div id="geminiBox">
         <p class="muted small"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>에 구글 계정으로 로그인 › <b>Create API key</b>로 무료 키를 받아 붙여넣으세요. 결제 등록 없이 하루 사용 한도 안에서 무료이며, 무료 등급에서는 보낸 사진이 구글 서비스 개선에 쓰일 수 있어요.</p>
@@ -233,6 +237,8 @@
 <script src="vendor/genai.js"></script>
 <script src="maps.js"></script>
 <script src="symptoms.js"></script>
+<script src="vendor/tf.min.js"></script>
+<script src="leafmodel.js"></script>
 <script src="pests.js"></script>
 <script src="ai.js"></script>
 <script src="app.js"></script>

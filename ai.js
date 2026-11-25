@@ -13,9 +13,9 @@ window.PestAI = (() => {
   const setKey = k => ls(KEY, k || "");
   const getGeminiKey = () => ls(GKEY);
   const setGeminiKey = k => ls(GKEY, k || "");
-  const getEngine = () => ls(EKEY) || "gemini";
+  const getEngine = () => ls(EKEY) || "offline";
   const setEngine = e => ls(EKEY, e);
-  const ready = () => getEngine() === "claude" ? !!getKey() : !!getGeminiKey();
+  const ready = () => { const e = getEngine(); return e === "offline" ? true : e === "claude" ? !!getKey() : !!getGeminiKey(); };
 
   // API로 보낼 사진은 긴 변 1568px JPEG로 맞춤
   function toB64(blob, max = 1568) {

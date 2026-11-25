@@ -293,7 +293,7 @@ $("#refQ").oninput = renderRef;
 function aiHTML(a, interactive = true) {
   const c = a.candidates || [];
   return `<div class="ai-card"><h4>${a.engine === "symptom" ? "📋" : "🤖"} 병해충 추론 결과</h4>
-    <div class="ai-meta"><span class="eng">${a.engine === "symptom" ? "📋 증상 체크 추론" : a.engine === "claude" ? "🤖 Claude 사진 추론" : "🤖 Gemini 사진 추론"}</span> · ${esc(a.at || "")} · 🌾 ${esc(a.crop || "")} · 참고용</div>
+    <div class="ai-meta"><span class="eng">${{ symptom: "📋 증상 체크 추론", claude: "🤖 Claude 사진 추론", gemini: "🤖 Gemini 사진 추론", offline: "📷 기기 안 사진 판별" }[a.engine] || "🤖 사진 추론"}</span> · ${esc(a.at || "")} · 🌾 ${esc(a.crop || "")} · 참고용</div>
     ${a.caution ? `<div class="ai-warn">🚨 ${esc(a.caution)}</div>` : ""}
     ${c.map((x, i) => `<div class="cand ${i === 0 ? "top" : ""}"><div class="cand-h"><span class="rank">${i + 1}순위</span><b>${CAT_EM[x.category] || ""} ${esc(x.name)}</b><span class="muted small">${esc(x.category)}</span>
         ${interactive ? `<button type="button" class="ghost" data-apply="${i}" style="margin-left:auto;padding:6px 10px">✅ 이걸로 적용</button>` : ""}</div>
@@ -337,16 +337,19 @@ $("#btnAI").onclick = async () => {
   const crop = f.crop.value.trim();
   if (!crop) { toast("🌾 작목을 먼저 입력해 주세요."); f.crop.focus(); return; }
   if (!pendingPhotos.length && !existingPhotos.length) { toast("📸 사진을 먼저 첨부해 주세요."); return; }
-  if (!PestAI.ready()) { toast("⚙️ 설정에서 무료 Gemini API 키를 먼저 넣어 주세요. (키 없이 쓰려면 📋 증상 체크 추론)"); openSettings(); return; }
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 사진 분석 중… (10~40초)';
+  if (!PestAI.ready()) { toast("⚙️ 설정에서 선택한 AI의 키를 넣거나, ‘기기 안 판별(무료)’을 고르세요."); openSettings(); return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 사진 분석 중…';
   try {
-    const res = await PestAI.diagnose({ crop, notes: f.notes.value.trim(), blobs: await photoBlobs() });
+    const blobs = await photoBlobs();
+    const res = PestAI.getEngine() === "offline"
+      ? await LeafModel.diagnose({ crop, blobs, onProgress: p => { btn.innerHTML = `<span class="spinner"></span> 판별 모델 준비 중… ${Math.round(p * 100)}%`; } })
+      : await PestAI.diagnose({ crop, notes: f.notes.value.trim(), blobs });
     res.crop = crop;
     currentAI = res; renderAI();
     $("#aiResult").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     if (e.message === "NO_KEY") openSettings(); else alert("🤖 " + e.message);
-  } finally { btn.disabled = false; btn.innerHTML = "🤖 사진 AI 추론<small>무료 Gemini · 인터넷 필요</small>"; }
+  } finally { btn.disabled = false; setAIButton(); }
 };
 
 /* ---------- 📋 증상 체크 추론 ---------- */
@@ -368,11 +371,19 @@ $("#btnSymRun").onclick = () => {
 };
 
 /* ---------- ⚙️ 설정 ---------- */
+function setAIButton() {
+  const e = PestAI.getEngine();
+  $("#btnAI").innerHTML = `📷 사진으로 추론<small>${{ offline: "무료 · 키 불필요 · 기기 안에서 분석", gemini: "Gemini · 인터넷 필요", claude: "Claude(유료) · 인터넷 필요" }[e] || ""}</small>`;
+}
 function syncEngineUI() {
   const eng = PestAI.getEngine();
+  setAIButton();
+  $("#offlineBox").classList.toggle("hidden", eng !== "offline");
   $$('#engineSeg input').forEach(i => i.checked = i.value === eng);
   $("#geminiBox").classList.toggle("hidden", eng !== "gemini");
   $("#claudeBox").classList.toggle("hidden", eng !== "claude");
+  $("#keyState").parentElement.querySelector(".actions").classList.toggle("hidden", eng === "offline");
+  if (eng === "offline") { $("#keyState").className = "status ok"; $("#keyState").textContent = "✅ 키 없이 바로 쓸 수 있어요."; return; }
   const k = eng === "claude" ? PestAI.getKey() : PestAI.getGeminiKey();
   const inp = eng === "claude" ? $("#apiKeyInput") : $("#geminiKeyInput");
   inp.value = ""; inp.placeholder = k ? `저장됨 (${k.slice(0, 6)}…${k.slice(-4)})` : (eng === "claude" ? "sk-ant-..." : "AIza...");
@@ -652,6 +663,7 @@ $("#btnCSV").onclick = () => {
   }
   await GeoKit.init({ nominatim: { reverse: (la, ln) => DB.reverse(la, ln), search: q => DB.search(q) } });
   initFormMap();
+  setAIButton();
   try { await refresh(); } catch (e) { toast("기록 불러오기 실패: " + e.message); }
   resetForm();
   if (GeoKit.getKakaoKey() && GeoKit.provider !== "kakao") toast("⚠️ 카카오지도를 불러오지 못해 기본 지도로 열었어요. ⚙️ 설정을 확인하세요.", 4500);
