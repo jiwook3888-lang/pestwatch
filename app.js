@@ -309,6 +309,7 @@ function aiHTML(a, interactive = true) {
   const c = a.candidates || [];
   return `<div class="ai-card"><h4>${a.engine === "symptom" ? "📋" : "🤖"} 병해충 추론 결과</h4>
     <div class="ai-meta"><span class="eng">${{ symptom: "📋 증상 체크 추론", claude: "🤖 Claude 사진 추론", gemini: "🤖 Gemini 사진 추론", offline: "📷 기기 안 사진 판별" }[a.engine] || "🤖 사진 추론"}</span> · ${esc(a.at || "")} · 🌾 ${esc(a.crop || "")} · 참고용</div>
+    ${a.fallbackNote ? `<div class="ai-warn">ℹ️ ${esc(a.fallbackNote)}</div>` : ""}
     ${a.caution ? `<div class="ai-warn">🚨 ${esc(a.caution)}</div>` : ""}
     ${c.map((x, i) => `<div class="cand ${i === 0 ? "top" : ""}"><div class="cand-h"><span class="rank">${i + 1}순위</span><b>${CAT_EM[x.category] || ""} ${esc(x.name)}</b><span class="muted small">${esc(x.category)}</span>
         ${interactive ? `<button type="button" class="ghost" data-apply="${i}" style="margin-left:auto;padding:6px 10px">✅ 이걸로 적용</button>` : ""}</div>
@@ -356,9 +357,19 @@ $("#btnAI").onclick = async () => {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 사진 분석 중…';
   try {
     const blobs = await photoBlobs();
-    const res = PestAI.getEngine() === "offline"
-      ? await LeafModel.diagnose({ crop, blobs, onProgress: p => { btn.innerHTML = `<span class="spinner"></span> 판별 모델 준비 중… ${Math.round(p * 100)}%`; } })
-      : await PestAI.diagnose({ crop, notes: f.notes.value.trim(), blobs });
+    const offline = () => LeafModel.diagnose({ crop, blobs, onProgress: p => { btn.innerHTML = `<span class="spinner"></span> 판별 모델 준비 중… ${Math.round(p * 100)}%`; } });
+    let res;
+    if (PestAI.getEngine() === "offline") res = await offline();
+    else {
+      try { res = await PestAI.diagnose({ crop, notes: f.notes.value.trim(), blobs }); }
+      catch (e) {
+        if (!e.fallback) throw e;
+        toast("⚠️ " + e.message + " 대신 기기 안 판별(무료)로 추론했어요.", 6000);
+        btn.innerHTML = '<span class="spinner"></span> 기기 안 판별로 분석 중…';
+        res = await offline();
+        res.fallbackNote = e.message + " 그래서 기기 안 판별(무료) 결과를 보여 드려요.";
+      }
+    }
     res.crop = crop;
     currentAI = res; renderAI();
     $("#aiResult").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -573,7 +584,7 @@ function showSync(s) {
     clearTimeout(rdaPoll); rdaPoll = setTimeout(async () => { try { showSync(await (await fetch("/api/rda/status")).json()); } catch (e) { } }, 2000);
   } else {
     $("#btnRdaSync").disabled = false; prog.classList.add("hidden");
-    if (s.state === "error") { $("#rdaState").className = "status err"; $("#rdaState").textContent = "⚠️ " + s.message; }
+    if (s.state === "error") { $("#rdaState").className = "status err"; $("#rdaState").style.whiteSpace = "pre-line"; $("#rdaState").textContent = "⚠️ 내려받기 실패\n" + s.message; }
     if (s.state === "done") {
       $("#rdaState").className = "status ok"; $("#rdaState").textContent = "✅ 내려받기 완료: " + s.message;
       RDA.init({ mode: "pc" }).then(() => { updateCropList(); updatePestList(); renderRdaRef(); });
@@ -585,8 +596,21 @@ $("#btnRdaKeySave").onclick = async () => {
   const body = { ncpmsKey: $("#ncpmsKeyInput").value.trim() || "-", psisKey: $("#psisKeyInput").value.trim() || "-" };
   if (body.ncpmsKey === "-" && body.psisKey === "-") { toast("키를 붙여넣어 주세요."); return; }
   await fetch("/api/rda/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  $("#ncpmsKeyInput").value = ""; $("#psisKeyInput").value = ""; toast("🔑 농진청 키를 저장했어요."); refreshRdaState();
+  $("#ncpmsKeyInput").value = ""; $("#psisKeyInput").value = ""; toast("🔑 농진청 키를 저장했어요. 키가 되는지 확인할게요…"); await refreshRdaState();
+  await testRdaKeys();
 };
+async function testRdaKeys() {
+  const st = $("#rdaState");
+  st.className = "status"; st.textContent = "🔌 농진청 서버에 키 확인 중…";
+  try {
+    const t = await (await fetch("/api/rda/test")).json();
+    const line = (n, x) => `${x.ok ? "✅" : "⚠️"} ${n}: ${x.message}`;
+    st.className = "status " + (t.ncpms.ok || t.psis.ok ? (t.ncpms.ok && t.psis.ok ? "ok" : "") : "err");
+    st.style.whiteSpace = "pre-line";
+    st.textContent = line("병해충(NCPMS)", t.ncpms) + "\n" + line("농약(PSIS)", t.psis) + (t.ncpms.ok || t.psis.ok ? "\n👉 이제 ‘전체 내려받기’를 누르세요." : "");
+    return t;
+  } catch (e) { st.className = "status err"; st.textContent = "⚠️ 키 확인 실패: " + e.message; }
+}
 $("#btnRdaSync").onclick = async () => {
   if (!confirm("농진청 데이터를 전체 내려받을까요? 10~20분 정도 걸려요.")) return;
   const r = await fetch("/api/rda/sync", { method: "POST" }); const j = await r.json();

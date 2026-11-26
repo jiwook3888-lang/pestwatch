@@ -84,19 +84,27 @@ window.PestAI = (() => {
     for (const b of blobs.slice(0, 4)) parts.push({ inlineData: { mimeType: "image/jpeg", data: await toB64(b) } });
     parts.push({ text: `작목: ${crop}\n${notes ? "현장 메모: " + notes + "\n" : ""}첨부한 사진 ${parts.length}장을 보고 병해충을 추론해 주세요. 지정된 JSON 형식으로만 답하세요.` });
     let res;
-    try {
-      res = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [{ role: "user", parts }],
-        config: { systemInstruction: SYSTEM, responseMimeType: "application/json", responseJsonSchema: SCHEMA },
-      });
-    } catch (e) {
-      const st = e?.status, msg = String(e?.message || e);
-      if (st === 400 && /API key|API_KEY/i.test(msg)) throw new Error("Gemini API 키가 올바르지 않습니다. ⚙️ 설정에서 다시 입력하세요.");
-      if (st === 403) throw new Error("Gemini API 키 권한 오류입니다. 키를 새로 발급받아 보세요.");
-      if (st === 429) throw new Error("무료 사용량(분당/일일 한도)을 넘었어요. 잠시 후 다시 시도하세요.");
-      if (!navigator.onLine || /fetch|network/i.test(msg)) throw new Error("인터넷 연결을 확인하세요. (사진 AI 추론은 인터넷이 필요합니다)");
-      throw new Error("AI 추론 실패: " + msg);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: [{ role: "user", parts }],
+          config: { systemInstruction: SYSTEM, responseMimeType: "application/json", responseJsonSchema: SCHEMA },
+        });
+        break;
+      } catch (e) {
+        const st = e?.status, msg = String(e?.message || e);
+        const busy = st === 503 || st === 500 || st === 502 || st === 504 || /overloaded|high demand|UNAVAILABLE/i.test(msg);
+        if (busy && attempt < 2) { await new Promise(r => setTimeout(r, [2000, 5000][attempt])); continue; }
+        let err;
+        if (st === 400 && /API key|API_KEY/i.test(msg)) err = new Error("Gemini API 키가 올바르지 않습니다. ⚙️ 설정에서 다시 입력하세요.");
+        else if (st === 403) err = new Error("Gemini API 키 권한 오류입니다. 키를 새로 발급받아 보세요.");
+        else if (st === 429) { err = new Error("Gemini 무료 사용량(분당/일일 한도)을 넘었어요."); err.fallback = true; }
+        else if (busy) { err = new Error("Gemini 서버가 지금 붐벼서 응답하지 않아요."); err.fallback = true; }
+        else if (!navigator.onLine || /fetch|network/i.test(msg)) { err = new Error("인터넷 연결이 안 돼서 Gemini를 쓸 수 없어요."); err.fallback = true; }
+        else err = new Error("AI 추론 실패: " + msg);
+        throw err;
+      }
     }
     const text = res.text;
     if (!text) throw new Error("AI가 답하지 않았어요. 다른 사진으로 다시 시도하세요.");
