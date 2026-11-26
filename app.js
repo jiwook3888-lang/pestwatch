@@ -817,6 +817,23 @@ $("#btnCSV").onclick = () => {
   downloadBlob(new Blob(["\ufeff" + [head.map(q).join(","), ...rows].join("\r\n")], { type: "text/csv" }), `예찰기록_${stamp()}.csv`);
 };
 
+/* ---------- PC: 설정을 프로그램 데이터 폴더에도 저장 (업데이트해도 유지) ---------- */
+async function syncPrefs() {
+  try {
+    const server = await (await fetch("/api/prefs")).json();
+    const local = {};
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("pestwatch.")) local[k] = localStorage.getItem(k); }
+    for (const [k, v] of Object.entries(server)) localStorage.setItem(k, v);           // 저장된 설정 복원
+    const missing = Object.fromEntries(Object.entries(local).filter(([k]) => !(k in server)));
+    if (Object.keys(missing).length) await fetch("/api/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(missing) });
+    // 이후 바뀌는 설정은 바로 서버에도 저장
+    const push = (k, v) => { if (String(k).startsWith("pestwatch.")) fetch("/api/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [k]: v }) }).catch(() => { }); };
+    const set = Storage.prototype.setItem, rm = Storage.prototype.removeItem;
+    Storage.prototype.setItem = function (k, v) { set.call(this, k, v); if (this === localStorage) push(k, String(v)); };
+    Storage.prototype.removeItem = function (k) { rm.call(this, k); if (this === localStorage) push(k, null); };
+  } catch (e) { }
+}
+
 (async () => {
   renderRef();
   let isPC = false;
@@ -828,6 +845,7 @@ $("#btnCSV").onclick = () => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => { });
   }
+  if (DB.mode === "pc") await syncPrefs();
   await GeoKit.init({ nominatim: { reverse: (la, ln) => DB.reverse(la, ln), search: q => DB.search(q) } });
   initFormMap();
   setAIButton();
