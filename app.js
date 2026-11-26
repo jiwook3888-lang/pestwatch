@@ -180,6 +180,26 @@ const Cloud = {
     await this.req("records?id=eq." + encodeURIComponent(id), { method: "DELETE" });
     if (old?.photos?.length) await this.req("photos?name=in.(" + old.photos.map(n => '"' + n + '"').join(",") + ")", { method: "DELETE" }).catch(() => { });
   },
+  // 농진청 중계 함수 (Supabase Edge Function 'rda')
+  async rda(api, params) {
+    const c = this.cfg;
+    const q = new URLSearchParams({ api, ...params });
+    let r;
+    try { r = await fetch(`${c.url}/functions/v1/rda?${q}`, { headers: { apikey: c.anon, Authorization: "Bearer " + c.anon, "x-team-code": c.code } }); }
+    catch (e) { throw new Error("농진청 중계에 연결하지 못했어요. 인터넷 연결을 확인하거나, 중계 함수(rda)를 만들었는지 확인해 주세요."); }
+    const t = await r.text();
+    if (r.status === 404) throw new Error("농진청 중계 함수(rda)가 아직 없어요. 안내문대로 Supabase에 만들어 주세요.");
+    if (r.status === 401) throw new Error("중계 함수의 ‘JWT 확인(Verify JWT)’을 꺼 주세요.");
+    if (!r.ok) { let m = t; try { m = JSON.parse(t).error || t; } catch (e) { } throw new Error("농진청 중계 오류: " + String(m).slice(0, 200)); }
+    const doc = new DOMParser().parseFromString(t, "text/xml");
+    if (doc.getElementsByTagName("parsererror").length) throw new Error("농진청 응답을 읽지 못했어요: " + t.slice(0, 120));
+    const ec = doc.getElementsByTagName("errorCode")[0]?.textContent?.trim();
+    if (ec && ec !== "00" && !/NORMAL/.test(ec)) {
+      const em = doc.getElementsByTagName("errorMsg")[0]?.textContent?.trim() || "";
+      throw new Error(/10[124]/.test(ec) ? `농진청 키 오류 [${ec} ${em}] — 중계 함수 Secrets의 키를 확인해 주세요.` : `농진청 오류 [${ec} ${em}]`);
+    }
+    return doc;
+  },
   photo(n) { return Local.urls[n] || ""; },
   reverse(la, ln) { return Local.reverse(la, ln); },
   search(q) { return Local.search(q); },
@@ -354,14 +374,18 @@ $("#lightbox").onclick = () => $("#lightbox").classList.add("hidden");
 function updatePestList() {
   const crop = $("#recForm").crop.value.trim();
   const items = new Map(PEST_REF.map(p => [p.name, `${p.category} · ${p.crops}`]));
-  if (RDA.loaded && crop) for (const [n, k] of RDA.pestNames(crop)) if (!items.has(n)) items.set(n, k);
+  if ((RDA.loaded || RDA.hasLive()) && crop) for (const [n, k] of RDA.pestNames(crop)) if (!items.has(n)) items.set(n, k);
   $("#pestList").innerHTML = [...items].slice(0, 400).map(([n, k]) => `<option value="${esc(n)}">${esc(k)}</option>`).join("");
 }
 function updateCropList() {
   $("#cropList").innerHTML = RDA.crops().map(c => `<option value="${esc(c)}">`).join("");
 }
 updatePestList();
-$("#recForm").crop.addEventListener("change", updatePestList);
+$("#recForm").crop.addEventListener("change", () => {
+  updatePestList();
+  const crop = $("#recForm").crop.value.trim();
+  if (RDA.hasLive() && crop) RDA.loadCrop(crop).then(ok => { if (ok) updatePestList(); }).catch(() => { });
+});
 function fillFromRef(force) {
   const f = $("#recForm");
   const name = f.pestName.value.trim();
@@ -540,6 +564,7 @@ async function renderCloud() {
   const n = on ? (await localRecords()).length : 0;
   $("#btnCloudUpload").classList.toggle("hidden", !n);
   $("#btnCloudUpload").textContent = `이 휴대폰에만 있던 기록 ${n}건 올리기`;
+  refreshRdaState();
 }
 async function reloadAll() { await refresh(); try { await loadList(); } catch (e) { } }
 $("#btnCloudSave").onclick = async () => {
@@ -605,7 +630,7 @@ function rdaNeed() {
   const p = $("#rdaPanel"); p.classList.remove("hidden");
   p.innerHTML = `<h4>농진청 데이터가 아직 없어요</h4><p class="small">${DB.mode === "pc"
     ? "설정 › 농촌진흥청 정보에서 무료 키를 넣고 전체 내려받기를 눌러 주세요."
-    : "PC 프로그램에서 내려받은 뒤 휴대폰용 DB 파일을 옮겨 설정 › 농진청 DB 파일 가져오기를 해 주세요."}</p><button type="button" class="primary" onclick="openSettings()">설정 열기</button>`;
+    : "설정에서 공유 저장소에 연결하면 휴대폰에서 바로 조회할 수 있어요. (관리자가 농진청 중계 함수를 한 번 만들어 두어야 해요)"}</p><button type="button" class="primary" onclick="openSettings()">설정 열기</button>`;
 }
 function detailHTML2(p, d) {
   const fields = (d.fields || []).filter(([k, v]) => RDA.cleanText(v) && !/key$/i.test(k) && !/^(cropName)$/.test(k));
@@ -632,10 +657,15 @@ async function showRdaPest(p, box, withFill) {
     box.querySelector("[data-close]")?.addEventListener("click", () => box.classList.add("hidden"));
   } catch (e) { box.innerHTML = `<p>${esc(e.message)}</p>`; }
 }
-$("#btnRdaInfo").onclick = () => {
+$("#btnRdaInfo").onclick = async () => {
   const f = $("#recForm"), crop = f.crop.value.trim(), name = f.pestName.value.trim();
-  if (!RDA.loaded) return rdaNeed();
+  if (!RDA.loaded && !RDA.hasLive()) return rdaNeed();
   if (!crop || !name) { toast("작목과 병해충명을 먼저 입력해 주세요."); return; }
+  if (RDA.hasLive()) {
+    const box = $("#rdaPanel"); box.classList.remove("hidden"); box.innerHTML = '<p class="muted">농진청에서 찾는 중…</p>';
+    try { await RDA.loadCrop(crop); } catch (e) { box.innerHTML = `<p>${esc(e.message)}</p>`; return; }
+    updatePestList();
+  }
   const p = RDA.findPest(crop, name);
   if (!p) {
     const opts = RDA.pestNames(crop).filter(([, k]) => !k.startsWith("")).slice(0, 40);
@@ -656,7 +686,7 @@ function pestiTable(res, selectable) {
 $("#btnRdaPesti").onclick = async () => {
   const f = $("#recForm"), crop = f.crop.value.trim(), pest = f.pestName.value.trim(), box = $("#rdaPanel");
   if (!crop) { toast("작목을 먼저 입력해 주세요."); return; }
-  if (!RDA.loaded && DB.mode !== "pc") return rdaNeed();
+  if (!RDA.loaded && DB.mode !== "pc" && !RDA.hasLive()) return rdaNeed();
   box.classList.remove("hidden"); box.innerHTML = '<p class="muted">등록농약을 찾는 중…</p>';
   try {
     const res = await RDA.pesticides(crop, pest);
@@ -680,9 +710,9 @@ $("#btnRdaPesti").onclick = async () => {
 /* 참고 탭: 농진청 병해충 검색 */
 function renderRdaRef() {
   const q = $("#refQ").value.trim(), st = RDA.stats();
-  $("#rdaRefInfo").textContent = st ? `농진청 데이터: 작물 ${st.crops.toLocaleString()}종 · 병해충 ${st.pests.toLocaleString()}건 · 등록농약 ${st.pesti.toLocaleString()}건 (${st.syncedAt || ""})` : "농진청 데이터가 아직 없어요. 설정에서 내려받거나 가져오세요.";
+  $("#rdaRefInfo").textContent = st ? `농진청 데이터: 작물 ${st.crops.toLocaleString()}종 · 병해충 ${st.pests.toLocaleString()}건 · 등록농약 ${st.pesti.toLocaleString()}건 (${st.syncedAt || ""})` : RDA.hasLive() ? "작목 이름(예: 고추, 사과)을 넣으면 농진청에서 바로 찾아와요." : "농진청 데이터가 아직 없어요. 설정에서 내려받거나 가져오세요.";
   const list = q ? RDA.search(q) : [];
-  $("#rdaRefList").innerHTML = list.map((p, i) => `<div class="rda-item" data-i="${i}"><span>${p.t === "충" ? "" : ""}</span><div><b>${esc(p.name)}</b> <span class="muted small">${esc(p.crop)}${p.eng ? " · " + esc(p.eng) : ""}</span></div></div>`).join("") + (q && !list.length && st ? '<p class="muted small">농진청 목록에서 찾지 못했어요.</p>' : "");
+  $("#rdaRefList").innerHTML = list.map((p, i) => `<div class="rda-item" data-i="${i}"><span>${p.t === "충" ? "" : ""}</span><div><b>${esc(p.name)}</b> <span class="muted small">${esc(p.crop)}${p.eng ? " · " + esc(p.eng) : ""}</span></div></div>`).join("") + (q && !list.length && (st || RDA.hasLive()) ? '<p class="muted small">농진청 목록에서 찾지 못했어요.</p>' : "");
   $$("#rdaRefList .rda-item").forEach(el => el.onclick = () => {
     const p = list[+el.dataset.i];
     const box = document.createElement("div"); box.className = "rda-panel";
@@ -692,7 +722,19 @@ function renderRdaRef() {
     });
   });
 }
-$("#refQ").addEventListener("input", () => { clearTimeout(renderRdaRef._t); renderRdaRef._t = setTimeout(renderRdaRef, 250); });
+$("#refQ").addEventListener("input", () => {
+  clearTimeout(renderRdaRef._t);
+  renderRdaRef._t = setTimeout(() => {
+    renderRdaRef();
+    const q = $("#refQ").value.trim();
+    if (RDA.hasLive() && q.length >= 1) RDA.loadCrop(q).then(ok => { if (ok) renderRdaRef(); }).catch(e => { $("#rdaRefInfo").textContent = e.message; });
+  }, 500);
+});
+$("#btnRdaLiveTest").onclick = async () => {
+  const ls = $("#rdaLiveState"); ls.className = "status"; ls.textContent = "농진청에 물어보는 중…";
+  try { const n = await RDA.liveTest(); ls.className = "status ok"; ls.textContent = `실시간 조회가 돼요. (예: 고추 병해 ${n}건)`; }
+  catch (e) { ls.className = "status err"; ls.textContent = e.message; }
+};
 
 /* 설정: 농진청 */
 let rdaPoll = null;
@@ -702,7 +744,13 @@ async function refreshRdaState() {
   $("#rdaState").textContent = st ? `작물 ${st.crops.toLocaleString()}종 · 병해충 ${st.pests.toLocaleString()}건 · 등록농약 ${st.pesti.toLocaleString()}건 (${st.syncedAt || "가져옴"})` : "아직 농진청 데이터가 없어요.";
   $("#rdaPcBox").classList.toggle("hidden", DB.mode !== "pc");
   $("#rdaMobileBox").classList.toggle("hidden", DB.mode === "pc");
-  if (DB.mode !== "pc") return;
+  if (DB.mode !== "pc") {
+    const ls = $("#rdaLiveState");
+    ls.className = "status " + (RDA.hasLive() ? "" : "err");
+    ls.textContent = RDA.hasLive() ? "공유 저장소에 연결돼 있어요. 아래 버튼으로 농진청 조회가 되는지 확인해 보세요." : "공유 저장소에 연결하면 실시간 조회를 쓸 수 있어요.";
+    $("#btnRdaLiveTest").disabled = !RDA.hasLive();
+    return;
+  }
   try {
     const k = await (await fetch("/api/rda/settings")).json();
     $("#ncpmsKeyInput").placeholder = k.ncpmsKey ? `저장됨 (${k.ncpmsKey})` : "NCPMS에서 받은 키";
@@ -1086,6 +1134,7 @@ async function syncPrefs() {
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => { });
     readJoinLink();
     if (Cloud.configured()) DB = Cloud;
+    RDA.setLive((api, p) => Cloud.rda(api, p), () => DB === Cloud);
   }
   if (DB.mode === "pc") await syncPrefs();
   await GeoKit.init({ nominatim: { reverse: (la, ln) => DB.reverse(la, ln), search: q => DB.search(q) } });

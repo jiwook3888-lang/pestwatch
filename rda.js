@@ -65,11 +65,11 @@ window.RDA = (() => {
       const r = await fetch("/api/rda/db", { method: "POST", headers: { "Content-Type": "application/json" }, body: text });
       const x = await r.json(); if (!r.ok) throw new Error(x.error || "가져오기 실패");
     } else await idbReq(st => st.put(j, "rdadb"), "readwrite");
-    db = j; index();
+    db = j; index(); liveCrops.clear();
     return stats();
   }
 
-  const stats = () => db ? { syncedAt: db.syncedAt, crops: db.crops.length, pests: db.pests.length, pesti: db.pesti.length } : null;
+  const stats = () => db && !db.liveOnly ? { syncedAt: db.syncedAt, crops: db.crops.length, pests: db.pests.length, pesti: db.pesti.length } : null;
   const crops = () => db ? db.crops : [];
 
   function cropKeyMatch(crop) {
@@ -107,10 +107,81 @@ window.RDA = (() => {
     return db.pests.filter(p => norm(p.name).includes(n) || norm(p.crop).includes(n)).slice(0, limit);
   }
 
+  /* ---------- 휴대폰: 공유 저장소의 중계 함수로 실시간 조회 ---------- */
+  let live = null, liveOk = () => false;
+  const liveCrops = new Map(); // crop -> Promise
+  const PCOLS = ["cropName", "diseaseWeedName", "useName", "pestiKorName", "pestiBrandName", "compName", "pestiUse", "dilutUnit", "useSuittime", "useNum", "indictSymbl", "engName"];
+  function setLive(fn, okFn) { live = fn; liveOk = okFn || (() => !!fn); }
+  const hasLive = () => !!live && liveOk();
+  const leafMap = el => { const m = {}; for (const c of el.children) if (!c.children.length) m[c.tagName] = c.textContent.trim(); return m; };
+  const itemsOf = doc => [...doc.getElementsByTagName("item")].map(leafMap);
+  const totalOf = doc => +(doc.getElementsByTagName("totalCount")[0]?.textContent || 0);
+  function ensureDb() {
+    if (!db) { db = { syncedAt: "", crops: [], pests: [], pestiCols: PCOLS, pesti: [], details: {}, liveOnly: true }; index(); }
+    db.details = db.details || {};
+  }
+  // 작목의 병·해충 목록을 농진청에서 받아 합침 (한 번만)
+  function loadCrop(crop) {
+    crop = String(crop || "").trim();
+    if (!hasLive() || !crop) return Promise.resolve(false);
+    const k = norm(crop);
+    if (!liveCrops.has(k)) liveCrops.set(k, (async () => {
+      ensureDb();
+      const have = new Set(db.pests.map(p => p.t + "|" + p.key)), add = [];
+      for (const [code, t, keyTag, nameTag] of [["SVC01", "병", "sickKey", "sickNameKor"], ["SVC03", "충", "insectKey", "insectKorName"]]) {
+        for (let start = 1, page = 0; page < 6; page++) {
+          const doc = await live("ncpms", { serviceCode: code, cropName: crop, displayCount: "50", startPoint: String(start) });
+          const items = itemsOf(doc);
+          for (const m of items) {
+            const name = m[nameTag], key = m[keyTag]; if (!name || have.has(t + "|" + key)) continue;
+            have.add(t + "|" + key);
+            add.push({ t, crop: m.cropName || crop, name, key, eng: m.sickNameEng || m.speciesName || "", img: m.thumbImg || "" });
+          }
+          start += items.length;
+          if (!items.length || start > totalOf(doc)) break;
+        }
+      }
+      db.pests.push(...add);
+      if (!db.crops.includes(crop)) db.crops.push(crop);
+      index();
+      return add.length > 0;
+    })().catch(e => { liveCrops.delete(k); throw e; }));
+    return liveCrops.get(k);
+  }
+  async function liveDetail(p) {
+    const doc = await live("ncpms", p.t === "충" ? { serviceCode: "SVC07", insectKey: p.key } : { serviceCode: "SVC05", sickKey: p.key });
+    const d = { fields: [], images: [] };
+    const walk = el => { for (const c of el.children) {
+      if (c.children.length) { walk(c); continue; }
+      let v = c.textContent.trim(); if (!v) continue;
+      const n = c.tagName;
+      if (/^image$/i.test(n) || /img$/i.test(n)) { if (!/^https?:/.test(v)) v = "https://ncpms.rda.go.kr" + (v.startsWith("/") ? "" : "/") + v; d.images.push(v.replace(/^http:/, "https:")); continue; }
+      d.fields.push([n, v]);
+    } };
+    walk(doc.documentElement);
+    return d;
+  }
+  async function livePesti(crop, pest) {
+    const rows = [];
+    for (let start = 1, page = 0; page < 8; page++) {
+      const q = { serviceCode: "SVC01", cropName: crop, displayCount: "50", startPoint: String(start) };
+      if (pest) q.diseaseWeedName = pest;
+      const doc = await live("psis", q);
+      const items = itemsOf(doc);
+      for (const m of items) rows.push(PCOLS.map(c => m[c] || ""));
+      start += items.length;
+      if (!items.length || start > totalOf(doc)) break;
+    }
+    return rows;
+  }
+
   async function detail(p) {
     const ck = (p.t === "충" ? "insect:" : "sick:") + p.key;
     if (db?.details?.[ck]) return db.details[ck];
-    if (mode !== "pc") throw new Error("휴대폰에서는 PC에서 한 번 조회한 상세정보만 볼 수 있어요. (PC에서 조회 후 DB 파일을 다시 옮기세요)");
+    if (mode !== "pc") {
+      if (!hasLive()) throw new Error("휴대폰에서 상세정보를 바로 보려면 설정에서 공유 저장소에 연결하고 농진청 중계를 켜 주세요.");
+      const d = await liveDetail(p); ensureDb(); db.details[ck] = d; return d;
+    }
     const r = await fetch(`/api/rda/detail?t=${p.t === "충" ? "insect" : "sick"}&key=${encodeURIComponent(p.key)}`);
     const j = await r.json(); if (!r.ok) throw new Error(j.error || "조회 실패");
     if (db) { db.details = db.details || {}; db.details[ck] = j; }
@@ -124,7 +195,13 @@ window.RDA = (() => {
     for (const ck of cropKeyMatch(crop)) rows.push(...(pestiByCrop.get(ck) || []));
     if (np) rows = rows.filter(r => { const d = norm(r[C.diseaseWeedName]); return d.includes(np) || (np.length >= 2 && np.includes(d) && d.length >= 2); });
     { const seen = new Set(); rows = rows.filter(r => { const k = r.join("|"); if (seen.has(k)) return false; seen.add(k); return true; }); }
-    if (rows.length || mode !== "pc") return { cols: db?.pestiCols || [], rows, live: false };
+    if (rows.length) return { cols: db?.pestiCols || [], rows, live: false };
+    if (mode !== "pc") {
+      if (!hasLive()) return { cols: db?.pestiCols || PCOLS, rows, live: false };
+      let lr = await livePesti(crop, pest);
+      if (!lr.length && pest && pest.length > 2) lr = await livePesti(crop, pest.replace(/병$|나방$/, ""));
+      return { cols: PCOLS, rows: lr, live: true };
+    }
     const r = await fetch(`/api/rda/pesticides?crop=${encodeURIComponent(crop)}&pest=${encodeURIComponent(pest || "")}`);
     const j = await r.json(); if (!r.ok) throw new Error(j.error || "조회 실패");
     return { cols: j.cols, rows: j.rows, live: true };
@@ -145,5 +222,7 @@ window.RDA = (() => {
     };
   }
 
-  return { init, loadBundled, importFile, stats, crops, pestNames, findPest, search, detail, pesticides, cleanText, toForm, PESTI_LABEL, DETAIL_LABEL, get loaded() { return !!db; }, get mode() { return mode; } };
+  async function liveTest() { const doc = await live("ncpms", { serviceCode: "SVC01", cropName: "고추", displayCount: "1", startPoint: "1" }); return totalOf(doc); }
+
+  return { setLive, hasLive, loadCrop, liveTest, init, loadBundled, importFile, stats, crops, pestNames, findPest, search, detail, pesticides, cleanText, toForm, PESTI_LABEL, DETAIL_LABEL, get loaded() { return !!db && !db.liveOnly; }, get mode() { return mode; } };
 })();

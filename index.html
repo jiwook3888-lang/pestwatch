@@ -258,7 +258,10 @@
         <div class="actions" style="margin-top:8px"><a class="btn" id="btnRdaExport" href="/api/rda/db?download=1">휴대폰용 DB 파일 내보내기</a></div>
       </div>
       <div id="rdaMobileBox">
-        <p class="muted small">농진청 자료가 앱에 들어 있으면 처음 열 때 자동으로 넣어요. 따로 받은 DB 파일이 있으면 아래에서 가져올 수도 있어요.</p>
+        <p class="muted small"><b>실시간 조회:</b> 공유 저장소에 연결되어 있고 관리자가 농진청 중계 함수를 만들어 두었으면, 작목을 넣는 순간 농진청 병해충 목록·상세정보·등록농약을 바로 불러와요. (인터넷 필요)</p>
+        <div id="rdaLiveState" class="status"></div>
+        <div class="actions"><button type="button" id="btnRdaLiveTest">농진청 실시간 조회 확인</button></div>
+        <p class="muted small">인터넷 없이 쓰려면 PC에서 만든 DB 파일을 가져오세요.</p>
       </div>
       <div class="actions"><label class="btn">농진청 DB 파일 가져오기<input type="file" id="rdaImport" accept=".json,application/json" hidden></label></div>
     </div>
