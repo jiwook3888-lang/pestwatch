@@ -211,6 +211,7 @@ function showTab(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "list") loadList();
   if (name === "map") renderBigMap();
+  if (name === "report") refresh().catch(() => { }).then(initReportCtl);
   if (name === "new") setTimeout(() => formMap?.relayout(), 50);
 }
 $$("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -793,7 +794,7 @@ $("#recForm").onsubmit = async e => {
       address: f.address.value.trim(), jibun: f.jibun.value.trim(), advisor: f.advisor.value.trim(), lat: num(f.lat.value), lng: num(f.lng.value),
       visitedAt: fromInputDT(f.visitedAt.value) || fromInputDT(nowLocal()),
       crop: f.crop.value.trim(), area: f.area.value.trim(), category: f.category.value, pestName: f.pestName.value.trim(),
-      severity: f.severity.value, symptoms: f.symptoms.value, diagnosis: f.diagnosis.value, remedy: f.remedy.value,
+      severity: f.severity.value, incidence: f.incidence.value.trim(), symptoms: f.symptoms.value, diagnosis: f.diagnosis.value, remedy: f.remedy.value,
       notes: f.notes.value, status: f.status.value, photos: [...existingPhotos], aiResult: currentAI || null,
     };
     const saved = await DB.save(editingId, rec, pendingPhotos);
@@ -811,7 +812,7 @@ function startEdit(r) {
   resetForm();
   editingId = r.id;
   const f = $("#recForm");
-  ["farmName", "farmer", "phone", "email", "address", "jibun", "advisor", "crop", "area", "category", "pestName", "severity", "symptoms", "diagnosis", "remedy", "notes", "status"]
+  ["farmName", "farmer", "phone", "email", "address", "jibun", "advisor", "crop", "area", "category", "pestName", "severity", "incidence", "symptoms", "diagnosis", "remedy", "notes", "status"]
     .forEach(k => { if (f[k]) f[k].value = r[k] ?? ""; });
   f.visitedAt.value = toInputDT(r.visitedAt);
   if (r.lat != null && r.lng != null) setFormPoint(r.lat, r.lng, { reverse: false });
@@ -901,13 +902,95 @@ $("#btnPrint").onclick = () => {
   $("#printArea").innerHTML = `<h1>병해충 예찰 진단 결과서</h1>
     <table>${row("농가명", r.farmName)}${row("농가주", r.farmer)}${row("연락처", r.phone)}${row("주소", r.address)}
     ${row("방문일시", r.visitedAt)}${r.advisor ? row("담당지도사", r.advisor) : ""}${row("작물 / 면적", [r.crop, r.area].filter(Boolean).join(" / "))}
-    ${row("병해충명", `${r.pestName} (${r.category}, ${r.severity})`)}${row("증상", r.symptoms)}${row("진단", r.diagnosis)}
+    ${row("병해충명", `${r.pestName} (${r.category}, ${r.severity}${r.incidence ? ", 발생률 " + r.incidence + "%" : ""})`)}${row("증상", r.symptoms)}${row("진단", r.diagnosis)}
     ${row("대처방안", r.remedy)}${r.notes ? row("비고", r.notes) : ""}${r.aiResult?.candidates?.length ? row("AI 추론(참고)", r.aiResult.candidates.map((c, i) => `${i + 1}. ${c.name} (${c.confidence}%)\n   근거: ${(c.evidence || []).join(" / ")}`).join("\n")) : ""}</table>
     <div class="pimgs">${(r.photos || []).slice(0, 6).map(p => `<img src="${esc(P(p))}">`).join("")}</div>
     <p style="text-align:right;margin-top:20px">${new Date().toLocaleDateString("ko-KR")}</p>`;
   const imgs = $$("#printArea img");
   Promise.all(imgs.map(i => i.complete ? 1 : new Promise(res => { i.onload = i.onerror = res; }))).then(() => window.print());
 };
+
+/* ---------- 보고서 ---------- */
+let curReport = null;
+function exportRecordsXlsx(list, name) { return Report.exportRecords(list, name); }
+function initReportCtl() {
+  const y = new Date().getFullYear(), years = new Set([y]);
+  records.forEach(r => { const v = +(r.visitedAt || "").slice(0, 4); if (v) years.add(v); });
+  const keepY = $("#rYear").value;
+  $("#rYear").innerHTML = [...years].sort((a, b) => b - a).map(v => `<option value="${v}">${v}년</option>`).join("");
+  if (keepY) $("#rYear").value = keepY;
+  if (!$("#rM").options.length) {
+    $("#rM").innerHTML = Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}">${i + 1}월</option>`).join("");
+    $("#rM").value = new Date().getMonth() + 1; $("#rQ").value = Math.floor(new Date().getMonth() / 3) + 1;
+    const d = new Date(); $("#rTo").value = d.toISOString().slice(0, 10); d.setMonth(d.getMonth() - 3); $("#rFrom").value = d.toISOString().slice(0, 10);
+  }
+  const keepA = $("#rAdv").value;
+  $("#rAdv").innerHTML = '<option value="">전체</option>' + [...new Set(records.map(r => r.advisor).filter(Boolean))].sort().map(a => `<option>${esc(a)}</option>`).join("");
+  $("#rAdv").value = keepA;
+  if (!$("#rOrg").value) $("#rOrg").value = localStorage.getItem("pestwatch.org") || "";
+  syncReportKind();
+  $("#rNote").textContent = DB === Cloud ? "공유 저장소의 모든 사람 기록으로 만들어요." : DB.mode === "pc" ? "이 PC 프로그램에 저장된 기록으로 만들어요." : "이 휴대폰에 저장된 기록으로 만들어요. 여러 사람 기록을 합치려면 설정에서 공유 저장소를 연결하세요.";
+  renderSavedReports();
+}
+function syncReportKind() {
+  const k = $("#rKind").value;
+  $("#rYearL").classList.toggle("hidden", k === "custom");
+  $("#rQL").classList.toggle("hidden", k !== "quarter");
+  $("#rML").classList.toggle("hidden", k !== "month");
+  $("#rFromL").classList.toggle("hidden", k !== "custom"); $("#rToL").classList.toggle("hidden", k !== "custom");
+}
+$("#rKind").onchange = syncReportKind;
+function reportOpt() {
+  return { kind: $("#rKind").value, year: $("#rYear").value, q: +$("#rQ").value, month: +$("#rM").value, from: $("#rFrom").value, to: $("#rTo").value, advisor: $("#rAdv").value, title: $("#rTitle").value.trim(), org: $("#rOrg").value.trim() };
+}
+function showReport(a) {
+  curReport = a;
+  $("#reportOut").classList.remove("hidden");
+  $("#reportOut").innerHTML = Report.html(a);
+  Report.drawMap(a);
+  ["#btnRSave", "#btnRPdf", "#btnRXlsx"].forEach(s => $(s).disabled = false);
+  $("#reportOut").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+$("#btnRMake").onclick = async () => {
+  const o = reportOpt();
+  if (o.kind === "custom" && (!o.from || !o.to || o.from > o.to)) { toast("시작일과 종료일을 확인해 주세요."); return; }
+  const b = $("#btnRMake"); b.disabled = true; b.textContent = "만드는 중…";
+  try { await refresh(); if (o.org) localStorage.setItem("pestwatch.org", o.org); showReport(Report.aggregate(records, o)); }
+  catch (e) { toast("보고서 만들기 실패: " + e.message, 5000); }
+  b.disabled = false; b.textContent = "보고서 만들기";
+};
+$("#btnRSave").onclick = () => {
+  if (!curReport) return;
+  curReport = Report.save(curReport); renderSavedReports(); toast("보고서를 저장했어요. 아래 ‘저장한 보고서’에서 다시 열 수 있어요.");
+};
+$("#btnRPdf").onclick = () => {
+  if (!curReport) return;
+  document.body.classList.add("print-report");
+  setTimeout(() => Report.refit(), 100);
+  setTimeout(() => { window.print(); setTimeout(() => { document.body.classList.remove("print-report"); Report.refit(); }, 500); }, 900);
+};
+$("#btnRXlsx").onclick = async () => {
+  if (!curReport) return;
+  try { await Report.exportReport(curReport, records); } catch (e) { toast("엑셀 만들기 실패: " + e.message, 5000); }
+};
+$("#btnRRecs").onclick = async () => {
+  const o = reportOpt(), p = Report.period(o);
+  if (!p.from || !p.to) { toast("기간을 확인해 주세요."); return; }
+  try {
+    await refresh();
+    const list = records.filter(r => { const d = (r.visitedAt || "").slice(0, 10); return d >= p.from && d <= p.to && (!o.advisor || r.advisor === o.advisor); });
+    if (!list.length) { toast("이 기간에는 기록이 없어요."); return; }
+    await Report.exportRecords(list, `예찰기록_${p.label.replace(/\s+/g, "")}`);
+  } catch (e) { toast("엑셀 만들기 실패: " + e.message, 5000); }
+};
+function renderSavedReports() {
+  const l = Report.listSaved();
+  $("#savedReports").innerHTML = l.length ? l.map(x => `<div class="sv"><div><b>${esc(x.title)}</b><span class="muted small">${esc(x.label)} · 예찰 ${x.kpi.total}건 · 저장 ${esc(x.savedAt || "")}</span></div>
+    <button type="button" data-ropen="${esc(x.id)}">열기</button><button type="button" class="ghost" data-rdel="${esc(x.id)}">삭제</button></div>`).join("")
+    : '<p class="muted small">아직 저장한 보고서가 없어요. 보고서를 만든 뒤 ‘저장’을 누르세요. 저장한 보고서는 그때의 집계 그대로 남아요.</p>';
+  $$("#savedReports [data-ropen]").forEach(b => b.onclick = () => { const x = Report.listSaved().find(r => r.id === b.dataset.ropen); if (x) showReport(x); });
+  $$("#savedReports [data-rdel]").forEach(b => b.onclick = () => { if (confirm("이 보고서를 삭제할까요?")) { Report.removeSaved(b.dataset.rdel); renderSavedReports(); } });
+}
 
 /* ---------- 전체 지도 ---------- */
 let bigMap = null;
@@ -969,12 +1052,9 @@ $("#importInput").onchange = async e => {
     await loadList();
   } catch (err) { alert("가져오기 실패: " + err.message); }
 };
-$("#btnCSV").onclick = () => {
-  if (DB.mode === "pc") { location.href = "/api/export.csv"; return; }
-  const head = ["방문일시", "담당지도사", "농가명", "농가주", "연락처", "이메일", "도로명주소", "지번주소", "위도", "경도", "작물", "면적", "구분", "병해충명", "심각도", "증상", "진단", "대처방안", "비고", "처리상태", "사진수", "AI추론"];
-  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = records.map(x => [x.visitedAt, x.advisor, x.farmName, x.farmer, x.phone, x.email, x.address, x.jibun, x.lat, x.lng, x.crop, x.area, x.category, x.pestName, x.severity, x.symptoms, x.diagnosis, x.remedy, x.notes, x.status, (x.photos || []).length, x.aiResult?.candidates?.[0] ? `${x.aiResult.candidates[0].name}(${x.aiResult.candidates[0].confidence}%)` : ""].map(q).join(","));
-  downloadBlob(new Blob(["\ufeff" + [head.map(q).join(","), ...rows].join("\r\n")], { type: "text/csv" }), `예찰기록_${stamp()}.csv`);
+$("#btnCSV").onclick = async () => {
+  try { await exportRecordsXlsx(typeof filtered === "function" ? filtered() : records, "예찰기록"); }
+  catch (e) { toast("엑셀 만들기 실패: " + e.message, 5000); }
 };
 
 /* ---------- PC: 설정을 프로그램 데이터 폴더에도 저장 (업데이트해도 유지) ---------- */
