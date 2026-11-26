@@ -1,5 +1,5 @@
 "use strict";
-// 🗺️ 지도·주소 모듈: 카카오지도(키가 있으면) / OpenStreetMap(키가 없을 때 자동 대체)
+// 지도·주소 모듈: 카카오지도(키가 있으면) / OpenStreetMap(키가 없을 때 자동 대체)
 // 주소: 카카오 장소·주소 통합검색 + 도로명주소 변환, 다음 우편번호(도로명주소) 검색
 window.GeoKit = (() => {
   const KAKAO_KEY = "pestwatch.kakaoKey";
@@ -148,16 +148,16 @@ window.GeoKit = (() => {
     if (provider === "kakao") {
       const S = kakao.maps.services;
       const addr = new Promise(res => new S.Geocoder().addressSearch(q, (r, st) => res(st === S.Status.OK ? r.map(x => ({
-        name: x.road_address?.building_name || "", road: x.road_address?.address_name || "", jibun: x.address?.address_name || x.address_name, lat: +x.y, lng: +x.x, kind: "📮 주소",
+        name: x.road_address?.building_name || "", road: x.road_address?.address_name || "", jibun: x.address?.address_name || x.address_name, lat: +x.y, lng: +x.x, kind: "주소",
       })) : [])));
       const kw = new Promise(res => new S.Places().keywordSearch(q, (r, st) => res(st === S.Status.OK ? r.slice(0, 10).map(x => ({
-        name: x.place_name, road: x.road_address_name, jibun: x.address_name, lat: +x.y, lng: +x.x, kind: "🏷️ " + (x.category_group_name || "장소"),
+        name: x.place_name, road: x.road_address_name, jibun: x.address_name, lat: +x.y, lng: +x.x, kind: "" + (x.category_group_name || "장소"),
       })) : [])));
       const [a, k] = await Promise.all([addr, kw]);
       return [...a, ...k];
     }
     const list = await nominatim.search(q);
-    return list.map(x => ({ name: "", road: "", jibun: x.display_name, lat: +x.lat, lng: +x.lon, kind: "📍 위치" }));
+    return list.map(x => ({ name: "", road: "", jibun: x.display_name, lat: +x.lat, lng: +x.lon, kind: "위치" }));
   }
 
   // 도로명주소 → 좌표 (다음 우편번호 결과 처리용)

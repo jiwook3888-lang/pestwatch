@@ -1,5 +1,5 @@
 "use strict";
-// 📷 오프라인 사진 판별 (무료 · 키 불필요 · 기기 안에서 실행)
+// 오프라인 사진 판별 (무료 · 키 불필요 · 기기 안에서 실행)
 // 모델: Greenathon Plant AI (Apache-2.0, PlantVillage 38종 학습, TensorFlow.js)
 // 한계: 실험실에서 찍은 잎 한 장 사진으로 학습한 모델이라 현장 사진에서는 정확도가 떨어질 수 있음.
 window.LeafModel = (() => {
@@ -89,7 +89,7 @@ window.LeafModel = (() => {
       note = `입력 작목 ‘${crop}’을(를) 모델의 ‘${mapped}’ 학습 범위로 보고 판별했어요.` +
         (C[topAll.i][0] !== mapped && topAll.p > 0.5 ? ` (참고: 작목 구분 없이 보면 ‘${C[topAll.i][0]} ${C[topAll.i][1]}’ 사진과 가장 비슷했어요. 작목을 확인하세요.)` : "");
     } else {
-      note = `⚠️ ‘${crop}’은(는) 이 모델이 학습한 작목(${SUPPORTED.join(", ")})이 아니라서 결과를 믿기 어려워요. 📋 증상 체크 추론을 함께 쓰세요.`;
+      note = `‘${crop}’은(는) 이 모델이 학습한 작목(${SUPPORTED.join(", ")})이 아니라서 결과를 믿기 어려워요. 증상 체크 추론을 함께 쓰세요.`;
     }
     const top = pool.slice(0, 3).filter((x, k) => k === 0 || x.p >= 0.05);
     const candidates = top.map(x => {
@@ -121,7 +121,7 @@ window.LeafModel = (() => {
       symptoms: ref ? ref.symptoms : isHealthy ? "뚜렷한 병징 없음" : `${t[0]} ${t[1]} 의심 증상`,
       diagnosis: ref ? ref.diagnosis : isHealthy ? "사진상 뚜렷한 병해가 확인되지 않음" : `${t[0]} ${t[1]}(${t[2]}성) 의심 — 현장 관찰로 확인 필요`,
       remedy: ref ? ref.remedy : REMEDY[t[2]] || REMEDY.곰팡이,
-      field_checks: isHealthy ? ["잎 뒷면·줄기·과실도 함께 확인"] : ["병반 부위를 가까이 다시 촬영해 비교", "📋 증상 체크 추론으로 교차 확인", "확신이 낮으면 정밀진단 의뢰"],
+      field_checks: isHealthy ? ["잎 뒷면·줄기·과실도 함께 확인"] : ["병반 부위를 가까이 다시 촬영해 비교", "증상 체크 추론으로 교차 확인", "확신이 낮으면 정밀진단 의뢰"],
       caution: /HLB|그린병/.test(t[1]) ? "감귤 그린병(HLB)은 국내 미발생 검역병이에요. 의심되면 즉시 관계기관에 신고하세요." : "",
       at: new Date().toLocaleString("ko-KR"),
     };

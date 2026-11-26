@@ -1,5 +1,5 @@
 "use strict";
-// 📷 사진 기반 병해충 추론 (Claude API)
+// 사진 기반 병해충 추론 (Claude API)
 // API 키는 이 기기(브라우저) 안에만 저장되며, 사진은 추론할 때만 Anthropic API로 전송됩니다.
 window.PestAI = (() => {
   const KEY = "pestwatch.apiKey";          // Claude (유료)
@@ -97,7 +97,7 @@ window.PestAI = (() => {
         const busy = st === 503 || st === 500 || st === 502 || st === 504 || /overloaded|high demand|UNAVAILABLE/i.test(msg);
         if (busy && attempt < 2) { await new Promise(r => setTimeout(r, [2000, 5000][attempt])); continue; }
         let err;
-        if (st === 400 && /API key|API_KEY/i.test(msg)) err = new Error("Gemini API 키가 올바르지 않습니다. ⚙️ 설정에서 다시 입력하세요.");
+        if (st === 400 && /API key|API_KEY/i.test(msg)) err = new Error("Gemini API 키가 올바르지 않습니다. 설정에서 다시 입력하세요.");
         else if (st === 403) err = new Error("Gemini API 키 권한 오류입니다. 키를 새로 발급받아 보세요.");
         else if (st === 429) { err = new Error("Gemini 무료 사용량(분당/일일 한도)을 넘었어요."); err.fallback = true; }
         else if (busy) { err = new Error("Gemini 서버가 지금 붐벼서 응답하지 않아요."); err.fallback = true; }
@@ -138,7 +138,7 @@ window.PestAI = (() => {
       });
     } catch (e) {
       const st = e?.status;
-      if (st === 401) throw new Error("API 키가 올바르지 않습니다. ⚙️ 설정에서 다시 입력하세요.");
+      if (st === 401) throw new Error("API 키가 올바르지 않습니다. 설정에서 다시 입력하세요.");
       if (st === 429) throw new Error("요청이 많습니다. 잠시 후 다시 시도하세요.");
       if (st === 400 && /credit|billing/i.test(e.message)) throw new Error("API 크레딧이 부족합니다. Anthropic 콘솔에서 결제 정보를 확인하세요.");
       if (!navigator.onLine || e?.name === "APIConnectionError") throw new Error("인터넷 연결을 확인하세요. (AI 추론은 인터넷이 필요합니다)");

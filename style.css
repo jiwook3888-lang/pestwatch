@@ -118,10 +118,6 @@ button:disabled{opacity:.6;cursor:progress}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* 이모티콘 바 */
-.emoji-bar{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 -2px;padding:6px;background:var(--g-ll);border-radius:12px}
-.emoji-bar button{padding:4px 7px;font-size:18px;border:0;background:transparent;border-radius:8px;font-weight:400}
-.emoji-bar button:hover{background:#fff}
-.emoji-bar .lab{font-size:12px;color:var(--mu);align-self:center;margin-right:4px;font-weight:700}
 
 /* 하단 저장바 */
 .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
@@ -269,3 +265,15 @@ code{background:#f1f4f2;padding:2px 6px;border-radius:6px;font-size:12.5px;word-
 .rda-item b{font-size:15px}
 .sub-h{margin:16px 0 8px}
 @media(max-width:760px){.rda-btns{grid-template-columns:1fr}}
+body:not(.mobile-mode) .mobile-only-block{display:none!important}
+
+/* 선 아이콘 */
+.ic{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px;margin-right:6px}
+.ic.lg{width:28px;height:28px;margin:0 0 4px}
+.icon-btn .ic,.brand .logo .ic{margin:0;width:20px;height:20px}
+.brand .logo .ic{width:24px;height:24px}
+nav button .ic{margin-right:6px}
+.sev::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:1px}
+.rec .ph .ph-l{font-size:22px;font-weight:800;color:var(--g)}
+.pin span{font-size:12px;font-weight:800;color:#fff}
+.ai-tag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.5px;padding:1px 6px;border-radius:6px;background:var(--g-l);color:var(--g);vertical-align:2px}

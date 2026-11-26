@@ -1,23 +1,23 @@
 "use strict";
-// 📋 증상 체크 추론 (무료 · 인터넷/키 불필요)
+// 증상 체크 추론 (무료 · 인터넷/키 불필요)
 // 현장에서 관찰한 증상을 고르면 참고자료의 병해충별 대표 증상과 맞춰 후보와 근거를 보여줍니다.
 window.SymptomCheck = (() => {
   const GROUPS = [
-    { title: "🍃 병반·곰팡이", items: [
+    { title: "병반·곰팡이", items: [
       ["sunken", "움푹 들어간 둥근 병반"], ["conc", "동심원 무늬·주황 포자덩이"], ["whitepow", "밀가루 같은 흰 곰팡이"],
       ["graymold", "잿빛 곰팡이·물러짐"], ["angular", "잎맥 사이 각진 노란 병반"], ["downy", "잎 뒷면 회백~자색 곰팡이"],
       ["water", "물에 데친 듯한 병반"], ["smallspot", "작은 갈색 점무늬"], ["burnt", "불에 탄 듯 검게 마름"] ] },
-    { title: "🥀 시듦·변형", items: [
+    { title: "시듦·변형", items: [
       ["wiltday", "낮에 시들고 밤에 회복"], ["wiltgreen", "푸른 채로 급격히 시듦"], ["basal", "줄기 밑동 갈변·잘록"],
       ["ooze", "세균 점액·줄기 단면 갈변"], ["hook", "가지 끝 갈고리처럼 휨"], ["mosaic", "모자이크·얼룩 무늬"],
       ["curl", "잎 오그라짐·기형"], ["stunt", "생육 위축"], ["yellow", "잎 황화(누렇게)"], ["tipburn", "잎끝 마름·배꼽썩음"] ] },
-    { title: "🐛 해충 흔적", items: [
+    { title: "해충 흔적", items: [
       ["silver", "은백색 긁힌 자국"], ["stipple", "흰 깨알 같은 흡즙 반점"], ["web", "거미줄"], ["honeydew", "끈적한 감로·그을음"],
       ["holes", "구멍·갉아먹은 흔적"], ["fruitbore", "과실 속 파먹음"], ["frass", "배설물"], ["eggmass", "가지에 알덩어리·산란흔"] ] },
-    { title: "🔍 보이는 벌레", items: [
+    { title: "보이는 벌레", items: [
       ["b_aphid", "작은 벌레 무리(진딧물류)"], ["b_white", "흰 날벌레(가루이)"], ["b_thrips", "가늘고 작은 노란·검은 벌레"],
       ["b_mite", "아주 작은 붉은·노란 점(응애)"], ["b_larva", "애벌레·나방"], ["b_hopper", "매미 모양 곤충"] ] },
-    { title: "🌦️ 발생 환경", items: [
+    { title: "발생 환경", items: [
       ["e_rain", "최근 비·고온다습"], ["e_dry", "건조·고온"], ["e_coolhum", "저온다습·결로(시설)"], ["e_flood", "침수·배수 불량"] ] },
   ];
   const LABEL = Object.fromEntries(GROUPS.flatMap(g => g.items));

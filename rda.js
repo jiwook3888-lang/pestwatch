@@ -1,5 +1,5 @@
 "use strict";
-// 📚 농촌진흥청 데이터 (NCPMS 병해충 · PSIS 등록농약)
+// 농촌진흥청 데이터 (NCPMS 병해충 · PSIS 등록농약)
 // PC: exe가 키로 전체를 내려받아 보관 / 휴대폰: PC에서 내보낸 DB 파일을 가져와 사용
 window.RDA = (() => {
   let db = null;          // {syncedAt, crops, pests, pestiCols, pesti, details}
@@ -11,10 +11,10 @@ window.RDA = (() => {
   const norm = s => String(s || "").replace(/[\s()·,]/g, "").toLowerCase();
   const PESTI_LABEL = { cropName: "작물", diseaseWeedName: "병해충·잡초", useName: "용도", pestiKorName: "품목명", pestiBrandName: "상표명", compName: "회사", pestiUse: "사용방법", dilutUnit: "희석배수(10a당)", useSuittime: "사용시기", useNum: "사용횟수", indictSymbl: "작용기작", engName: "주성분" };
   const DETAIL_LABEL = {
-    cropName: "🌾 작물", sickNameKor: "🦠 병명", sickNameEng: "영문명", sickNameChn: "한자명", insectKorName: "🐛 해충명", speciesName: "학명", insectSpeciesKor: "학명",
-    symptoms: "👀 증상", developmentCondition: "🌦️ 발생환경", infectionRoute: "🔁 전염경로", preventionMethod: "💊 방제방법",
-    biologyPrvnbeMth: "🐞 생물적 방제", chemicalPrvnbeMth: "🧪 화학적 방제", ecologyInfo: "🔄 생태", damageInfo: "🍂 피해", preventMethod: "💊 방제방법",
-    stleInfo: "🔍 형태", qrantInfo: "🚨 검역정보", generalInfo: "📄 일반정보", etc: "기타",
+    cropName: "작물", sickNameKor: "병명", sickNameEng: "영문명", sickNameChn: "한자명", insectKorName: "해충명", speciesName: "학명", insectSpeciesKor: "학명",
+    symptoms: "증상", developmentCondition: "발생환경", infectionRoute: "전염경로", preventionMethod: "방제방법",
+    biologyPrvnbeMth: "생물적 방제", chemicalPrvnbeMth: "화학적 방제", ecologyInfo: "생태", damageInfo: "피해", preventMethod: "방제방법",
+    stleInfo: "형태", qrantInfo: "검역정보", generalInfo: "일반정보", etc: "기타",
   };
 
   function index() {
@@ -42,6 +42,22 @@ window.RDA = (() => {
     return !!db;
   }
 
+  // 앱에 내장된 농진청 자료(data/rda_db.json)를 자동으로 넣음. 사용자가 직접 받은 더 최신 자료는 덮어쓰지 않음
+  async function loadBundled(onProgress) {
+    let meta;
+    try { const r = await fetch("data/rda_meta.json", { cache: "no-cache" }); if (!r.ok) return false; meta = await r.json(); } catch (e) { return false; }
+    if (!meta || !meta.syncedAt) return false;
+    if (db && db.syncedAt && db.syncedAt >= meta.syncedAt) return false;
+    if (db && !db.bundled && db.syncedAt) return false;
+    onProgress && onProgress(meta);
+    const r = await fetch("data/rda_db.json", { cache: "no-cache" }); if (!r.ok) return false;
+    const text = await r.text();
+    const j = JSON.parse(text); j.bundled = true;
+    if (db && db.details) j.details = Object.assign({}, db.details, j.details || {});
+    await importFile(JSON.stringify(j));
+    return true;
+  }
+
   async function importFile(text) {
     const j = JSON.parse(text);
     if (!Array.isArray(j.crops) || !Array.isArray(j.pesti)) throw new Error("농진청 DB 파일이 아니에요");
@@ -67,8 +83,8 @@ window.RDA = (() => {
   function pestNames(crop) {
     const out = new Map();
     for (const ck of cropKeyMatch(crop)) {
-      for (const p of byCrop.get(ck) || []) out.set(p.name, p.t === "충" ? "🐛 해충" : "🦠 병해");
-      for (const r of pestiByCrop.get(ck) || []) { const n = r[C.diseaseWeedName]; if (n && !out.has(n)) out.set(n, "💊 " + (r[C.useName] || "농약 등록")); }
+      for (const p of byCrop.get(ck) || []) out.set(p.name, p.t === "충" ? "해충" : "병해");
+      for (const r of pestiByCrop.get(ck) || []) { const n = r[C.diseaseWeedName]; if (n && !out.has(n)) out.set(n, "" + (r[C.useName] || "농약 등록")); }
     }
     return [...out.entries()];
   }
@@ -129,5 +145,5 @@ window.RDA = (() => {
     };
   }
 
-  return { init, importFile, stats, crops, pestNames, findPest, search, detail, pesticides, cleanText, toForm, PESTI_LABEL, DETAIL_LABEL, get loaded() { return !!db; }, get mode() { return mode; } };
+  return { init, loadBundled, importFile, stats, crops, pestNames, findPest, search, detail, pesticides, cleanText, toForm, PESTI_LABEL, DETAIL_LABEL, get loaded() { return !!db; }, get mode() { return mode; } };
 })();
